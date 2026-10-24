@@ -39,8 +39,24 @@ private struct GeneralSettings: View {
                     Text("Every 60 seconds").tag(60)
                     Text("Every 5 minutes").tag(300)
                 }
+            }
+            Section {
                 Picker("Currency", selection: $store.currencyCode) {
-                    Text("USD ($)").tag("USD")
+                    ForEach(Format.currencies) { currency in
+                        Text(currency.label).tag(currency.code)
+                    }
+                }
+                if store.currencyCode != "USD" {
+                    TextField(
+                        "1 USD equals",
+                        value: $store.unitsPerUSD,
+                        format: .number.precision(.fractionLength(0...6))
+                    )
+                }
+            } footer: {
+                if store.currencyCode != "USD" {
+                    Text("Gateway prices are in USD. The rate only changes what you see.")
+                        .tallySecondary()
                 }
             }
             Section {
@@ -160,8 +176,8 @@ private struct BudgetsSettings: View {
     var body: some View {
         Form {
             Section {
-                TextField("Daily budget", value: $store.dailyBudget, format: .currency(code: store.currencyCode))
-                TextField("Monthly budget", value: $store.monthlyBudget, format: .currency(code: store.currencyCode))
+                TextField("Daily budget", value: displayBudget(\.dailyBudget), format: .currency(code: store.currencyCode))
+                TextField("Monthly budget", value: displayBudget(\.monthlyBudget), format: .currency(code: store.currencyCode))
             }
             Section {
                 LabeledContent("Warning threshold") {
@@ -186,6 +202,14 @@ private struct BudgetsSettings: View {
         .formStyle(.grouped)
         .sheet(isPresented: $showCaps) {
             ModelCapsSheet(store: store)
+        }
+    }
+
+    private func displayBudget(_ keyPath: ReferenceWritableKeyPath<TallyStore, Double>) -> Binding<Double> {
+        Binding {
+            store.displayAmount(store[keyPath: keyPath])
+        } set: { shown in
+            store[keyPath: keyPath] = store.usdAmount(shown)
         }
     }
 }
@@ -236,9 +260,19 @@ private struct ModelCapsSheet: View {
                 store.modelCaps[key] = nil
                 return
             }
-            let numeric = trimmed.filter { $0.isNumber || $0 == "." }
-            guard let value = Double(numeric) else { return }
-            store.modelCaps[key] = value > 0 ? value : nil
+            guard let shown = parseDisplayAmount(trimmed), shown > 0 else { return }
+            store.modelCaps[key] = store.usdAmount(shown)
         }
+    }
+
+    private func parseDisplayAmount(_ text: String) -> Double? {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = store.currencyCode
+        if let number = formatter.number(from: text) {
+            return number.doubleValue
+        }
+        formatter.numberStyle = .decimal
+        return formatter.number(from: text)?.doubleValue
     }
 }

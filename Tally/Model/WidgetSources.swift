@@ -19,17 +19,6 @@ enum WidgetSource: String, CaseIterable, Identifiable {
         case .cursor: "Cursor"
         }
     }
-
-    /// Short name for the menu bar, where width is the constraint.
-    var menuLabel: String {
-        switch self {
-        case .gateway: "Gateway"
-        case .codex: "Codex"
-        case .claude: "Claude"
-        case .grok: "Grok"
-        case .cursor: "Cursor"
-        }
-    }
 }
 
 struct QuotaReading: Equatable {

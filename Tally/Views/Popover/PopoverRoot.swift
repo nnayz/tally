@@ -7,24 +7,21 @@ struct PopoverRoot: View {
 
     var body: some View {
         Group {
-            switch store.phase {
-            case .signedOut:
-                SignInView(store: store)
-            case .loading:
-                LoadingView()
-            case .offline:
-                OfflineView(store: store)
-            case .empty:
-                EmptyUsageView(store: store)
-            case .live:
-                switch store.layout {
-                case .compact:
-                    CompactPopover(store: store, openHistory: openHistory, openSettings: showSettings)
-                case .alert:
-                    AlertPopover(store: store, openHistory: openHistory, openSettings: showSettings)
-                case .detailed:
-                    DetailedPopover(store: store, openHistory: openHistory, openSettings: showSettings)
+            if store.gatewayEnabled {
+                switch store.phase {
+                case .signedOut:
+                    SignInView(store: store)
+                case .loading:
+                    LoadingView()
+                case .offline:
+                    OfflineView(store: store)
+                case .empty:
+                    EmptyUsageView(store: store)
+                case .live:
+                    livePopover
                 }
+            } else {
+                CompactPopover(store: store, openHistory: openHistory, openSettings: showSettings)
             }
         }
         .preferredColorScheme(store.appearance.colorScheme)
@@ -32,6 +29,18 @@ struct PopoverRoot: View {
             if store.phase == .live, store.layout == .compact, store.shouldPresentAlert {
                 store.layout = .alert
             }
+        }
+    }
+
+    @ViewBuilder
+    private var livePopover: some View {
+        switch store.layout {
+        case .compact:
+            CompactPopover(store: store, openHistory: openHistory, openSettings: showSettings)
+        case .alert:
+            AlertPopover(store: store, openHistory: openHistory, openSettings: showSettings)
+        case .detailed:
+            DetailedPopover(store: store, openHistory: openHistory, openSettings: showSettings)
         }
     }
 

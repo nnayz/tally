@@ -14,6 +14,7 @@ struct AlertPopover: View {
             BudgetBanner(store: store)
             todayCard
             monthCard
+            SubscriptionSection(store: store)
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Top drivers now")
                 HStack {

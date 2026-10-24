@@ -24,9 +24,18 @@ struct CompactPopover: View {
                 }
             }
 
-            todayCard
-            monthCard
+            if store.gatewayEnabled {
+                todayCard
+                monthCard
+            }
+            SubscriptionSection(store: store)
+            if !store.gatewayEnabled && store.quotaSources.isEmpty {
+                Text("Turn on a source in Settings to show it here.")
+                    .font(.subheadline)
+                    .tallySecondary()
+            }
 
+            if store.gatewayEnabled {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionLabel(text: "Top models today")
@@ -43,6 +52,7 @@ struct CompactPopover: View {
                 ForEach(Array(store.ledger.todayModels.prefix(3))) { total in
                     compactModel(total)
                 }
+            }
             }
 
             HStack(spacing: 8) {
@@ -131,5 +141,54 @@ struct CompactPopover: View {
             )
             .padding(.leading, 16)
         }
+    }
+}
+
+struct SubscriptionSection: View {
+    @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        if !store.quotaSources.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel(text: "Subscriptions")
+                ForEach(store.quotaSources) { source in
+                    row(source)
+                }
+            }
+        }
+    }
+
+    private func row(_ source: WidgetSource) -> some View {
+        let reading = store.quotas[source]
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Text(source.title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(percentText(reading?.percent))
+                    .font(.subheadline)
+                    .monospacedDigit()
+            }
+            if let percent = reading?.percent {
+                BudgetBar(
+                    fraction: percent / 100,
+                    tint: store.quotaLevel(percent).fill(scheme),
+                    height: 4,
+                    label: "percent of \(source.title) quota used"
+                )
+            }
+            Text(reading?.detail ?? "Loading…")
+                .font(.caption)
+                .tallySecondary()
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func percentText(_ percent: Double?) -> String {
+        guard let percent else { return "—" }
+        return "\(Int(percent.rounded()))%"
     }
 }

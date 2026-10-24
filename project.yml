@@ -23,6 +23,9 @@ targets:
       ENABLE_HARDENED_RUNTIME: NO
       ENABLE_APP_SANDBOX: NO
       GENERATE_INFOPLIST_FILE: NO
+      OTHER_LDFLAGS:
+        - "$(inherited)"
+        - "-lsqlite3"
     info:
       path: Tally/Info.plist
       properties:

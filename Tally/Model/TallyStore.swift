@@ -30,7 +30,19 @@ final class TallyStore {
         }
     }
     var currencyCode: String {
-        didSet { persist() }
+        didSet {
+            if currencyCode != oldValue {
+                unitsPerUSD = 1
+            }
+            persist()
+        }
+    }
+    // shortcut: one manual rate against USD, no live feed — add a rate source when display should track the market
+    var unitsPerUSD: Double {
+        didSet {
+            if unitsPerUSD <= 0 { unitsPerUSD = 1 }
+            persist()
+        }
     }
     var dayStart: DayStart {
         didSet { persist() }
@@ -112,6 +124,11 @@ final class TallyStore {
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: Key.menuBar) ?? "") ?? .spend
         refreshSeconds = defaults.object(forKey: Key.refresh) as? Int ?? 60
         currencyCode = defaults.string(forKey: Key.currency) ?? "USD"
+        let storedRate = defaults.object(forKey: Key.unitsPerUSD) as? Double ?? 1
+        unitsPerUSD = storedRate > 0 ? storedRate : 1
+        #if DEBUG
+        Format.checkCurrencies()
+        #endif
         dayStart = DayStart(rawValue: defaults.string(forKey: Key.dayStart) ?? "") ?? .utcMidnight
         appearance = AppearanceChoice(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
         dailyBudget = defaults.object(forKey: Key.dailyBudget) as? Double ?? 25
@@ -173,12 +190,24 @@ final class TallyStore {
         return "••••••••••••\(suffix)"
     }
 
+    var displayRate: Double {
+        Format.rate(code: currencyCode, unitsPerUSD: unitsPerUSD)
+    }
+
+    func displayAmount(_ usd: Double) -> Double {
+        usd * displayRate
+    }
+
+    func usdAmount(_ shown: Double) -> Double {
+        shown / displayRate
+    }
+
     func money(_ value: Double, digits: Int = 2) -> String {
-        Format.money(value, digits: digits, code: currencyCode)
+        Format.money(displayAmount(value), digits: digits, code: currencyCode)
     }
 
     func moneyCompact(_ value: Double) -> String {
-        Format.moneyCompact(value, code: currencyCode)
+        Format.moneyCompact(displayAmount(value), code: currencyCode)
     }
 
     func cap(for model: AIModel) -> Double? {
@@ -509,6 +538,7 @@ final class TallyStore {
         defaults.set(menuBarStyle.rawValue, forKey: Key.menuBar)
         defaults.set(refreshSeconds, forKey: Key.refresh)
         defaults.set(currencyCode, forKey: Key.currency)
+        defaults.set(unitsPerUSD, forKey: Key.unitsPerUSD)
         defaults.set(dayStart.rawValue, forKey: Key.dayStart)
         defaults.set(appearance.rawValue, forKey: Key.appearance)
         defaults.set(dailyBudget, forKey: Key.dailyBudget)
@@ -529,6 +559,7 @@ final class TallyStore {
         static let menuBar = "menuBarStyle"
         static let refresh = "refreshSeconds"
         static let currency = "currencyCode"
+        static let unitsPerUSD = "unitsPerUSD"
         static let dayStart = "dayStart"
         static let appearance = "appearance"
         static let dailyBudget = "dailyBudget"

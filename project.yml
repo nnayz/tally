@@ -1,0 +1,41 @@
+name: Tally
+options:
+  bundleIdPrefix: com.nnayz
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  SWIFT_VERSION: "5.0"
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+  MARKETING_VERSION: "1.0.0"
+  CURRENT_PROJECT_VERSION: "1"
+targets:
+  Tally:
+    type: application
+    platform: macOS
+    sources:
+      - path: Tally
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.nnayz.tally
+      PRODUCT_NAME: Tally
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "-"
+      ENABLE_HARDENED_RUNTIME: NO
+      ENABLE_APP_SANDBOX: NO
+      GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: Tally/Info.plist
+      properties:
+        CFBundleDisplayName: Tally
+        CFBundleName: Tally
+        LSUIElement: true
+        LSMinimumSystemVersion: "15.0"
+        NSUserNotificationsUsageDescription: Tally notifies you when spend reaches a budget you set.
+        NSHighResolutionCapable: true
+schemes:
+  Tally:
+    build:
+      targets:
+        Tally: all
+    run:
+      config: Debug

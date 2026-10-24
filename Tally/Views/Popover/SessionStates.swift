@@ -3,6 +3,8 @@ import SwiftUI
 struct SignInView: View {
     @Bindable var store: TallyStore
     @State private var apiKey = ""
+    @State private var apiKeyError: String?
+    @FocusState private var apiKeyFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,7 +30,7 @@ struct SignInView: View {
                 .multilineTextAlignment(.center)
             Text("Sign in to the gateway management portal to load usage and cost data.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
                 .multilineTextAlignment(.center)
                 .padding(.top, 6)
                 .padding(.horizontal, 8)
@@ -36,24 +38,50 @@ struct SignInView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Gateway URL")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
                 TextField("https://gateway.example.com", text: $store.gatewayURL)
                     .textFieldStyle(.roundedBorder)
             }
             .padding(.top, 18)
 
             if store.signInUsesAPIKey {
-                SecureField("API key", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .padding(.top, 8)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("API key")
+                        .font(.caption)
+                        .tallySecondary()
+                    SecureField("", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("API key")
+                        .focused($apiKeyFocused)
+                    if let apiKeyError {
+                        Text(apiKeyError)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .padding(.top, 8)
                 Button("Continue") {
-                    store.signIn(apiKey: apiKey)
+                    let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty {
+                        apiKeyError = "Enter an API key to continue."
+                        apiKeyFocused = true
+                    } else {
+                        apiKeyError = nil
+                        store.signIn(apiKey: trimmed)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 8)
-                .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Use browser sign-in") {
+                    apiKeyError = nil
+                    store.signInUsesAPIKey = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
             } else {
                 Button("Sign in with Browser") {
                     store.signIn(apiKey: nil)
@@ -73,7 +101,7 @@ struct SignInView: View {
 
             Text("Credentials are stored in the macOS Keychain.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
                 .padding(.top, 14)
         }
         .padding(16)
@@ -100,7 +128,7 @@ struct LoadingView: View {
             Spacer(minLength: 0)
             Text("Fetching usage from gateway…")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
                 .frame(maxWidth: .infinity)
         }
         .padding(16)
@@ -138,7 +166,7 @@ struct OfflineView: View {
                         .font(.subheadline.weight(.semibold))
                     Text("Showing cached data from \(Format.clock(store.ledger.cachedAt)). Retrying on the next refresh.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
@@ -149,17 +177,8 @@ struct OfflineView: View {
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
 
-            cachedCard(title: "TODAY · CACHED", amount: store.ledger.cachedTodaySpend, budget: store.dailyBudget)
-            cachedCard(title: "THIS MONTH · CACHED", amount: store.ledger.cachedMonthSpend, budget: store.monthlyBudget)
-
-            Button("Session expired? Sign in again") {
-                store.signOut()
-            }
-            .buttonStyle(.plain)
-            .font(.subheadline)
-            .foregroundStyle(Color.accentColor)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 4)
+            cachedCard(title: "Today · cached", amount: store.ledger.cachedTodaySpend, budget: store.dailyBudget)
+            cachedCard(title: "This month · cached", amount: store.ledger.cachedMonthSpend, budget: store.monthlyBudget)
         }
         .padding(16)
         .frame(width: 320)
@@ -171,6 +190,7 @@ struct OfflineView: View {
                 SectionLabel(text: title)
                 Text(store.money(amount))
                     .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
                 BudgetBar(fraction: budget > 0 ? amount / budget : 0)
             }
@@ -191,14 +211,14 @@ struct EmptyUsageView: View {
             Spacer(minLength: 12)
             Image(systemName: "chart.bar.fill")
                 .font(.system(size: 28))
-                .foregroundStyle(.secondary)
+                .tallySecondary()
                 .frame(width: 56, height: 56)
                 .background(Circle().fill(Color.primary.opacity(0.06)))
             Text("No requests yet today")
                 .font(.headline)
             Text("Usage appears here once requests pass through the gateway. Monthly spend so far: \(store.money(store.ledger.monthSpend)).")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
                 .multilineTextAlignment(.center)
             Button("Refresh", action: store.refresh)
                 .buttonStyle(.bordered)
@@ -206,7 +226,7 @@ struct EmptyUsageView: View {
             Spacer(minLength: 12)
             Text("Budget: \(store.money(0)) of \(store.money(store.dailyBudget)) today")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
         }
         .padding(16)
         .frame(width: 320, height: 360)

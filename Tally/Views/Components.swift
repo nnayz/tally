@@ -1,6 +1,51 @@
 import AppKit
 import SwiftUI
 
+enum TallyPalette {
+    /// #757575 is 4.61:1 on white. Dark mode keeps system secondary (5.89:1 on #1E1E1E).
+    static func secondaryText(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.secondary : Color(white: 0.46)
+    }
+
+    /// Light #0066D6 is 5.42:1 on white. Dark #409CFF is 5.89:1 on #1E1E1E.
+    static func accentText(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0.251, green: 0.612, blue: 1)
+            : Color(red: 0, green: 0.400, blue: 0.839)
+    }
+
+    /// Light graphic #B45000. Dark keeps system orange so the light color is not reused.
+    static func warningFill(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.orange : Color(red: 0.706, green: 0.314, blue: 0)
+    }
+
+    /// Light graphic #148232. Dark keeps system green.
+    static func statusGreen(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.green : Color(red: 0.078, green: 0.510, blue: 0.196)
+    }
+}
+
+private struct TallySecondary: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(TallyPalette.secondaryText(scheme))
+    }
+}
+
+private struct TallyAccent: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(TallyPalette.accentText(scheme))
+    }
+}
+
+extension View {
+    func tallySecondary() -> some View { modifier(TallySecondary()) }
+    func tallyAccent() -> some View { modifier(TallyAccent()) }
+}
+
 struct SpendCard<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -18,8 +63,10 @@ struct SectionLabel: View {
     var body: some View {
         Text(text)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .tallySecondary()
             .tracking(0.4)
+            .textCase(.uppercase)
+            .accessibilityLabel(text)
     }
 }
 
@@ -27,6 +74,7 @@ struct BudgetBar: View {
     var fraction: Double
     var tint: Color = .accentColor
     var height: CGFloat = 6
+    var label: String = "percent of budget"
 
     var body: some View {
         GeometryReader { geo in
@@ -37,7 +85,18 @@ struct BudgetBar: View {
                 .frame(width: max(0, geo.size.width * min(max(fraction, 0), 1)))
         }
         .frame(height: height)
-        .accessibilityLabel("\(Int((fraction * 100).rounded())) percent of budget")
+        .accessibilityLabel("\(Int((fraction * 100).rounded())) \(label)")
+    }
+}
+
+struct BudgetStatus: View {
+    var level: BudgetLevel
+    var period: String
+
+    var body: some View {
+        Label(level.statusTitle(period: period), systemImage: level.symbolName)
+            .font(.caption2.weight(.semibold))
+            .tallySecondary()
     }
 }
 
@@ -88,10 +147,11 @@ struct PopoverTitle: View {
 
 struct BudgetBanner: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let level = store.dailyLevel
-        let tint: Color = level == .over ? .red : .orange
+        let tint: Color = level == .over ? .red : TallyPalette.warningFill(scheme)
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 16))
@@ -102,7 +162,7 @@ struct BudgetBanner: View {
                     .font(.subheadline.weight(.semibold))
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -133,13 +193,14 @@ struct PeriodChips: View {
                     .font(.caption)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .foregroundStyle(selected ? Color.accentColor : .primary)
+                    .foregroundStyle(.primary)
                     .background {
                         Capsule().fill(selected ? Color.accentColor.opacity(0.16) : Color.clear)
                     }
                     .overlay {
                         Capsule().stroke(Color.primary.opacity(selected ? 0 : 0.14), lineWidth: 1)
                     }
+                    .accessibilityAddTraits(selected ? .isSelected : [])
             }
             Spacer(minLength: 0)
         }

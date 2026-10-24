@@ -31,9 +31,9 @@ enum AIModel: String, CaseIterable, Identifiable, Hashable, Comparable {
     var color: Color {
         switch self {
         case .claudeSonnet: Color(red: 0.36, green: 0.42, blue: 0.96)
-        case .gpt4o: Color(red: 0.20, green: 0.78, blue: 0.35)
-        case .geminiPro: Color(red: 0.98, green: 0.58, blue: 0.14)
-        case .gpt4oMini: Color(red: 0.25, green: 0.78, blue: 0.88)
+        case .gpt4o: Color(red: 0.000, green: 0.553, blue: 0.516)
+        case .geminiPro: Color(red: 0.650, green: 0.457, blue: 0.000)
+        case .gpt4oMini: Color(red: 0.000, green: 0.541, blue: 0.628)
         case .claudeHaiku: Color(red: 0.62, green: 0.36, blue: 0.95)
         }
     }
@@ -48,11 +48,26 @@ enum BudgetLevel: Equatable {
     case warning
     case over
 
-    var color: Color {
+    var symbolName: String {
         switch self {
-        case .ok: .primary
-        case .warning: .orange
-        case .over: .red
+        case .ok: "checkmark.circle"
+        case .warning, .over: "exclamationmark.circle"
+        }
+    }
+
+    func statusTitle(period: String) -> String {
+        switch self {
+        case .ok: "On track"
+        case .warning: "Near \(period) limit"
+        case .over: "Over \(period) limit"
+        }
+    }
+
+    func fill(_ scheme: ColorScheme) -> Color {
+        switch self {
+        case .ok: Color.accentColor
+        case .warning: TallyPalette.warningFill(scheme)
+        case .over: Color.red
         }
     }
 }
@@ -138,7 +153,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "Overview"
         case .models: "Models"
-        case .conversations: "Convos"
+        case .conversations: "Conversations"
         case .requests: "Requests"
         }
     }

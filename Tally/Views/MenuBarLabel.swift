@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarLabel: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let level = store.dailyLevel
@@ -14,16 +15,16 @@ struct MenuBarLabel: View {
                     .monospacedDigit()
             }
             if store.menuBarStyle == .meter {
-                BudgetBar(fraction: store.todayFraction, tint: level == .ok ? Color.primary : level.color, height: 4)
+                BudgetBar(fraction: store.todayFraction, tint: level.fill(scheme), height: 4)
                     .frame(width: 32)
             }
             if level == .warning {
                 Circle()
-                    .fill(Color.orange)
+                    .fill(level.fill(scheme))
                     .frame(width: 6, height: 6)
             }
         }
-        .foregroundStyle(level.color)
+        .foregroundStyle(.primary)
         .padding(.horizontal, level == .over ? 6 : 0)
         .padding(.vertical, level == .over ? 1 : 0)
         .background {

@@ -56,6 +56,7 @@ private struct GeneralSettings: View {
                 }
             } footer: {
                 Text("Budgets reset at the selected time. Use UTC to match the gateway’s billing day.")
+                    .tallySecondary()
             }
         }
         .formStyle(.grouped)
@@ -64,8 +65,10 @@ private struct GeneralSettings: View {
 
 private struct GatewaySettings: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     @State private var replacingKey = false
     @State private var draftKey = ""
+    @State private var confirmSignOut = false
 
     var body: some View {
         Form {
@@ -74,24 +77,32 @@ private struct GatewaySettings: View {
                     HStack(alignment: .center, spacing: 12) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.title2)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(TallyPalette.statusGreen(scheme))
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Connected")
                                 .font(.headline)
                             Text("\(store.accountEmail) · team: \(store.teamName)")
                                 .font(.subheadline)
-                            Text("Last sync \(Format.clock(store.lastUpdated)) · token expires in \(daysUntilExpiry) days")
+                            Text("Last sync \(Format.clock(store.lastUpdated)) · token expires in ^[\(daysUntilExpiry) day](inflect: true)")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .tallySecondary()
                         }
                         Spacer()
-                        Button("Sign Out") { store.signOut() }
+                        Button("Sign Out") { confirmSignOut = true }
+                            .confirmationDialog("Sign out?", isPresented: $confirmSignOut) {
+                                Button("Sign out", role: .destructive) {
+                                    store.signOut()
+                                }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("This removes the saved API key from Keychain.")
+                            }
                     }
                 }
             } else {
                 Section {
                     Text("Not connected. Open Tally from the menu bar to sign in.")
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                 }
             }
             Section {
@@ -115,7 +126,7 @@ private struct GatewaySettings: View {
                     } else {
                         HStack {
                             Text(store.isSignedIn ? store.maskedAPIKey : "Not set")
-                                .foregroundStyle(.secondary)
+                                .tallySecondary()
                                 .monospaced()
                             Button("Change…") { replacingKey = true }
                         }
@@ -130,6 +141,7 @@ private struct GatewaySettings: View {
                 }
             } footer: {
                 Text("Keys and tokens are stored in the macOS Keychain. Prompts and outputs are never downloaded — metadata only.")
+                    .tallySecondary()
             }
         }
         .formStyle(.grouped)
@@ -168,6 +180,7 @@ private struct BudgetsSettings: View {
                 }
             } footer: {
                 Text("Budgets are monitored only — Tally does not block requests. Enforce hard limits in the gateway.")
+                    .tallySecondary()
             }
         }
         .formStyle(.grouped)
@@ -180,6 +193,7 @@ private struct BudgetsSettings: View {
 private struct ModelCapsSheet: View {
     @Bindable var store: TallyStore
     @Environment(\.dismiss) private var dismiss
+    @State private var drafts: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -187,18 +201,14 @@ private struct ModelCapsSheet: View {
                 .font(.headline)
             Text("Optional monthly caps. Tally only warns — it does not block traffic.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
             ForEach(AIModel.allCases) { model in
                 HStack {
                     ModelDot(color: model.color)
                     Text(model.rawValue)
                     Spacer()
-                    TextField(
-                        "No cap",
-                        value: capBinding(model),
-                        format: .currency(code: store.currencyCode)
-                    )
-                    .frame(width: 120)
+                    TextField("No cap", text: draftBinding(model))
+                        .frame(width: 120)
                 }
             }
             HStack {
@@ -211,15 +221,24 @@ private struct ModelCapsSheet: View {
         .frame(width: 420)
     }
 
-    private func capBinding(_ model: AIModel) -> Binding<Double> {
-        Binding {
-            store.modelCaps[model.rawValue] ?? 0
-        } set: { newValue in
-            if newValue <= 0 {
-                store.modelCaps[model.rawValue] = nil
-            } else {
-                store.modelCaps[model.rawValue] = newValue
+    private func draftBinding(_ model: AIModel) -> Binding<String> {
+        let key = model.rawValue
+        return Binding {
+            if let draft = drafts[key] {
+                return draft
             }
+            guard let cap = store.modelCaps[key] else { return "" }
+            return store.money(cap)
+        } set: { newValue in
+            drafts[key] = newValue
+            let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                store.modelCaps[key] = nil
+                return
+            }
+            let numeric = trimmed.filter { $0.isNumber || $0 == "." }
+            guard let value = Double(numeric) else { return }
+            store.modelCaps[key] = value > 0 ? value : nil
         }
     }
 }

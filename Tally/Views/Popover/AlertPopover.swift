@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AlertPopover: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
     var openSettings: () -> Void
 
@@ -14,7 +15,7 @@ struct AlertPopover: View {
             todayCard
             monthCard
             VStack(alignment: .leading, spacing: 6) {
-                SectionLabel(text: "TOP DRIVERS NOW")
+                SectionLabel(text: "Top drivers now")
                 HStack {
                     Text(store.ledger.topDriver.name)
                         .font(.subheadline.weight(.medium))
@@ -48,20 +49,22 @@ struct AlertPopover: View {
         SpendCard {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    SectionLabel(text: "TODAY")
+                    SectionLabel(text: "Today")
                     Spacer()
                     Text(Format.percent(store.todayFraction))
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(store.dailyLevel.color)
+                        .monospacedDigit()
+                        .tallySecondary()
                 }
                 Text(store.money(store.ledger.todaySpend))
                     .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(store.dailyLevel.color)
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
+                BudgetStatus(level: store.dailyLevel, period: "daily")
                 Text("of \(store.money(store.dailyBudget)) daily budget")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                BudgetBar(fraction: min(store.todayFraction, 1), tint: store.dailyLevel.color)
+                    .tallySecondary()
+                BudgetBar(fraction: min(store.todayFraction, 1), tint: store.dailyLevel.fill(scheme))
             }
         }
     }
@@ -69,11 +72,13 @@ struct AlertPopover: View {
     private var monthCard: some View {
         SpendCard {
             VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "THIS MONTH")
+                SectionLabel(text: "This month")
                 Text("\(store.money(store.ledger.monthSpend)) of \(store.moneyCompact(store.monthlyBudget))")
                     .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
-                BudgetBar(fraction: store.monthFraction, tint: store.monthlyLevel == .ok ? .accentColor : store.monthlyLevel.color)
+                BudgetStatus(level: store.monthlyLevel, period: "monthly")
+                BudgetBar(fraction: store.monthFraction, tint: store.monthlyLevel.fill(scheme))
             }
         }
     }

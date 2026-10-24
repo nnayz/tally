@@ -9,6 +9,7 @@ struct UsageHistoryView: View {
     @State private var limit = 50
     @State private var query = ""
     @State private var didPreselect = false
+    @State private var exportError = false
 
     var body: some View {
         NavigationSplitView {
@@ -18,22 +19,16 @@ struct UsageHistoryView: View {
             detail
         }
         .navigationTitle("Usage History")
+        .searchable(text: $query, prompt: "Search requests")
         .toolbar {
-            ToolbarItem(placement: .automatic) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search", text: $query)
-                        .textFieldStyle(.plain)
-                        .frame(width: 160)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Export CSV…", action: export)
             }
+        }
+        .alert("Couldn't save the CSV", isPresented: $exportError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check that you can write to that folder and try again.")
         }
         .preferredColorScheme(store.appearance.colorScheme)
         .frame(minWidth: 960, minHeight: 560)
@@ -45,9 +40,11 @@ struct UsageHistoryView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("VIEWS")
+                Text("Views")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
+                    .textCase(.uppercase)
+                    .accessibilityLabel("Views")
                     .padding(.horizontal, 8)
                 List(HistoryView.allCases, selection: $store.historyView) { view in
                     Text(view.title).tag(view)
@@ -56,9 +53,11 @@ struct UsageHistoryView: View {
                 .frame(height: 148)
             }
             VStack(alignment: .leading, spacing: 10) {
-                Text("FILTERS")
+                Text("Filters")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
+                    .textCase(.uppercase)
+                    .accessibilityLabel("Filters")
                 filterMenu("Date range", selection: $store.historyRange) {
                     ForEach(DateRange.allCases) { range in
                         Text(range.rawValue).tag(range)
@@ -96,7 +95,7 @@ struct UsageHistoryView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
             Picker(title, selection: selection, content: content)
                 .pickerStyle(.menu)
                 .labelsHidden()
@@ -144,7 +143,7 @@ struct UsageHistoryView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
             Text(value)
                 .font(.title3.weight(.semibold))
                 .monospacedDigit()
@@ -256,17 +255,18 @@ struct UsageHistoryView: View {
         return HStack {
             if store.historyView == .allRequests || store.historyView == .errors {
                 Text("Showing 1–\(shown) of \(Format.count(total)) · \(selection.count) selected")
+                    .tallySecondary()
             } else {
-                Text("\(Format.count(total)) requests in this view")
+                Text("^[\(total) request](inflect: true) in this view")
+                    .tallySecondary()
             }
             Spacer()
             Button("Load more") { limit += 50 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                .tallyAccent()
                 .disabled(shown >= total || store.historyView == .byModel || store.historyView == .byConversation)
         }
         .font(.subheadline)
-        .foregroundStyle(.secondary)
     }
 
     private var modelAggregates: [ModelAggregate] {
@@ -339,7 +339,11 @@ struct UsageHistoryView: View {
         panel.nameFieldStringValue = "Tally Usage.csv"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            try? csvText.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try csvText.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                exportError = true
+            }
         }
     }
 
@@ -357,7 +361,7 @@ private struct StatusPill: View {
     var body: some View {
         Text(status == 200 ? "OK" : "\(status)")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(status == 200 ? Color.green : Color.red)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background((status == 200 ? Color.green : Color.red).opacity(0.16), in: Capsule())

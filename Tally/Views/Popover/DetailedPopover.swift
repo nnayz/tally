@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DetailedPopover: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
     var openSettings: () -> Void
 
@@ -11,11 +12,11 @@ struct DetailedPopover: View {
             PopoverTitle {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(Color.green)
+                        .fill(TallyPalette.statusGreen(scheme))
                         .frame(width: 6, height: 6)
                     Text("Live · \(Format.clock(store.lastUpdated))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                     GearButton(action: openSettings)
                 }
             }
@@ -55,7 +56,7 @@ struct DetailedPopover: View {
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
             }
             .font(.subheadline)
             .padding(.horizontal, 16)
@@ -67,6 +68,7 @@ struct DetailedPopover: View {
 
 private struct OverviewTab: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
 
     var body: some View {
@@ -74,28 +76,30 @@ private struct OverviewTab: View {
             BudgetBanner(store: store)
         }
         HStack(spacing: 8) {
-            kpi("TODAY", amount: store.ledger.todaySpend, fraction: store.todayFraction, budget: store.dailyBudget, level: store.dailyLevel)
-            kpi("THIS MONTH", amount: store.ledger.monthSpend, fraction: store.monthFraction, budget: store.monthlyBudget, level: store.monthlyLevel)
+            kpi("Today", amount: store.ledger.todaySpend, fraction: store.todayFraction, budget: store.dailyBudget, level: store.dailyLevel, period: "daily")
+            kpi("This month", amount: store.ledger.monthSpend, fraction: store.monthFraction, budget: store.monthlyBudget, level: store.monthlyLevel, period: "monthly")
         }
         chartCard
         statsCard
         driverCard
     }
 
-    private func kpi(_ title: String, amount: Double, fraction: Double, budget: Double, level: BudgetLevel) -> some View {
+    private func kpi(_ title: String, amount: Double, fraction: Double, budget: Double, level: BudgetLevel, period: String) -> some View {
         SpendCard {
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: title)
                 Text(store.money(amount))
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(level.color)
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                BudgetBar(fraction: min(fraction, 1), tint: level == .ok ? .accentColor : level.color)
+                BudgetStatus(level: level, period: period)
+                BudgetBar(fraction: min(fraction, 1), tint: level.fill(scheme))
                 Text("\(Format.percent(fraction)) of \(store.moneyCompact(budget))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .tallySecondary()
             }
         }
     }
@@ -103,7 +107,7 @@ private struct OverviewTab: View {
     private var chartCard: some View {
         SpendCard {
             VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "DAILY SPEND · LAST 14 DAYS")
+                SectionLabel(text: "Daily spend · last 14 days")
                 Chart {
                     ForEach(store.ledger.dailySpend) { day in
                         BarMark(
@@ -119,7 +123,7 @@ private struct OverviewTab: View {
                         .annotation(position: .top, alignment: .trailing) {
                             Text("Budget \(store.moneyCompact(store.dailyBudget))")
                                 .font(.caption2)
-                                .foregroundStyle(.red)
+                                .tallySecondary()
                         }
                 }
                 .chartYAxis(.hidden)
@@ -149,12 +153,14 @@ private struct OverviewTab: View {
     }
 
     private var statsCard: some View {
-        SpendCard {
+        let count = store.ledger.todayRequestCount
+        let average = count > 0 ? store.ledger.todaySpend / Double(count) : 0
+        return SpendCard {
             HStack(alignment: .top) {
-                stat("Requests", Format.count(store.ledger.todayRequestCount), "Today")
+                stat("Requests", Format.count(count), "Today")
                 stat("Tokens in", Format.tokens(store.ledger.todayTokensIn), nil)
                 stat("Tokens out", Format.tokens(store.ledger.todayTokensOut), nil)
-                stat("Avg / req", store.money(0.014, digits: 3), nil)
+                stat("Avg / req", store.money(average, digits: 3), nil)
             }
         }
     }
@@ -163,14 +169,14 @@ private struct OverviewTab: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
             Text(value)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
             if let caption {
                 Text(caption)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .tallySecondary()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,12 +186,12 @@ private struct OverviewTab: View {
         let driver = store.ledger.topDriver
         return SpendCard {
             VStack(alignment: .leading, spacing: 4) {
-                SectionLabel(text: "BIGGEST COST DRIVER TODAY")
+                SectionLabel(text: "Biggest cost driver today")
                 Text(driver.name)
                     .font(.subheadline.weight(.semibold))
-                Text("\(store.money(driver.cost)) · \(driver.requests) requests · \(driver.model.rawValue)")
+                Text("\(store.money(driver.cost)) · ^[\(driver.requests) request](inflect: true) · \(driver.model.rawValue)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
                 Button("View conversation ›") {
                     store.historyConversation = driver.name
                     store.historyRange = .today
@@ -195,7 +201,7 @@ private struct OverviewTab: View {
                 }
                 .buttonStyle(.plain)
                 .font(.subheadline)
-                .foregroundStyle(Color.accentColor)
+                .tallyAccent()
                 .padding(.top, 2)
             }
         }
@@ -213,13 +219,13 @@ private struct ModelsTab: View {
         let sum = totals.reduce(0) { $0 + $1.cost }
         SpendCard {
             VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "SPEND BY MODEL · \(periodLabel)")
+                SectionLabel(text: "Spend by model · \(periodLabel)")
                 stacked(totals, total: sum)
-                Text("\(store.money(sum)) total · \(totals.count) models")
+                Text("\(store.money(sum)) total · ^[\(totals.count) model](inflect: true)")
                     .font(.subheadline)
                 Text("Stacked bar = share of \(store.modelPeriod == .month ? "monthly" : "period") spend")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
             }
         }
         HStack {
@@ -243,18 +249,27 @@ private struct ModelsTab: View {
             }
             .buttonStyle(.plain)
             .font(.subheadline)
-            .foregroundStyle(Color.accentColor)
+            .tallyAccent()
         }
         SpendCard {
             VStack(spacing: 0) {
                 HStack {
-                    Text("MODEL").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("REQ").frame(width: 44, alignment: .trailing)
-                    Text("$/1K REQ").frame(width: 58, alignment: .trailing)
-                    Text("COST").frame(width: 72, alignment: .trailing)
+                    Text("Model")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Model")
+                    Text("Req")
+                        .frame(width: 44, alignment: .trailing)
+                        .accessibilityLabel("Req")
+                    Text("$/1K req")
+                        .frame(width: 58, alignment: .trailing)
+                        .accessibilityLabel("$/1K req")
+                    Text("Cost")
+                        .frame(width: 72, alignment: .trailing)
+                        .accessibilityLabel("Cost")
                 }
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .tallySecondary()
+                .textCase(.uppercase)
                 .padding(.bottom, 6)
                 ForEach(totals) { total in
                     Divider()
@@ -267,9 +282,9 @@ private struct ModelsTab: View {
 
     private var periodLabel: String {
         switch store.modelPeriod {
-        case .today: "TODAY"
-        case .sevenDays: "7 DAYS"
-        case .month: "OCT"
+        case .today: "Today"
+        case .sevenDays: "7 days"
+        case .month: store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
         }
     }
 
@@ -296,11 +311,11 @@ private struct ModelsTab: View {
                         .font(.subheadline.weight(.medium))
                     Text(total.model.vendor)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                     if let cap = store.cap(for: total.model), total.cost > cap {
                         Text("Over \(store.moneyCompact(cap)) cap")
                             .font(.caption2)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.primary)
                     }
                 }
             }
@@ -314,7 +329,8 @@ private struct ModelsTab: View {
                     .fontWeight(.semibold)
                 Text("\(share)%")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .tallySecondary()
             }
             .frame(width: 72, alignment: .trailing)
         }
@@ -329,15 +345,21 @@ private struct ConversationsTab: View {
 
     var body: some View {
         PeriodChips(selection: $store.conversationPeriod)
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search conversations", text: $store.conversationQuery)
-                .textFieldStyle(.plain)
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Search")
+                .font(.caption)
+                .tallySecondary()
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .tallySecondary()
+                TextField("Conversations", text: $store.conversationQuery)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search conversations")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
 
         let rows = store.conversationTotals(for: store.conversationPeriod)
         let maxCost = rows.map(\.cost).max() ?? 1
@@ -348,7 +370,7 @@ private struct ConversationsTab: View {
                 if rows.isEmpty {
                     Text("No conversations match.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                         .padding(.vertical, 12)
                 }
                 ForEach(rows) { row in
@@ -371,11 +393,13 @@ private struct ConversationsTab: View {
     }
 
     private var header: String {
+        let period: String
         switch store.conversationPeriod {
-        case .today: "MOST EXPENSIVE · TODAY"
-        case .sevenDays: "MOST EXPENSIVE · 7 DAYS"
-        case .month: "MOST EXPENSIVE · OCT"
+        case .today: period = "Today"
+        case .sevenDays: period = "7 days"
+        case .month: period = store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
         }
+        return "Most expensive · \(period)"
     }
 
     private var range: DateRange {
@@ -391,21 +415,25 @@ private struct ConversationsTab: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
                     .font(.subheadline.weight(.medium))
-                Text("\(Format.count(row.requests)) requests · \(row.modelLabel)")
+                Text("^[\(row.requests) request](inflect: true) · \(row.modelLabel)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(store.money(row.cost))
                     .font(.subheadline.weight(.semibold))
                     .monospacedDigit()
-                BudgetBar(fraction: maxCost > 0 ? row.cost / maxCost : 0, height: 3)
-                    .frame(width: 70)
+                BudgetBar(
+                    fraction: maxCost > 0 ? row.cost / maxCost : 0,
+                    height: 3,
+                    label: "percent of the largest conversation"
+                )
+                .frame(width: 70)
             }
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
+                .tallySecondary()
         }
         .contentShape(Rectangle())
     }
@@ -413,6 +441,7 @@ private struct ConversationsTab: View {
 
 private struct RequestsTab: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
 
     var body: some View {
@@ -420,11 +449,11 @@ private struct RequestsTab: View {
         SpendCard {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    SectionLabel(text: "RECENT REQUESTS")
+                    SectionLabel(text: "Recent requests")
                     Spacer()
                     Text("Last 50")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                 }
                 .padding(.bottom, 8)
                 ForEach(rows) { row in
@@ -443,7 +472,7 @@ private struct RequestsTab: View {
                 }
                 .buttonStyle(.plain)
                 .font(.subheadline)
-                .foregroundStyle(Color.accentColor)
+                .tallyAccent()
                 .padding(.top, 10)
             }
         }
@@ -458,19 +487,19 @@ private struct RequestsTab: View {
                 Spacer()
                 Text(Format.clock(row.time) + ":" + seconds(row.time))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .tallySecondary()
             }
             HStack {
                 Text(row.isError ? "Error \(row.status) · not billed" : "\(row.conversation) · \(Format.count(row.input)) in / \(Format.count(row.output)) out")
                     .font(.caption)
-                    .foregroundStyle(row.isError ? Color.red : Color.secondary)
+                    .foregroundStyle(row.isError ? Color.primary : TallyPalette.secondaryText(scheme))
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text(row.cost == 0 ? store.money(0) : store.money(row.cost, digits: 4))
                     .font(.caption)
                     .monospacedDigit()
-                    .foregroundStyle(row.isError ? Color.red : Color.primary)
+                    .foregroundStyle(.primary)
             }
         }
     }

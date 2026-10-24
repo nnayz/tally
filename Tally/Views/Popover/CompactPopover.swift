@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CompactPopover: View {
     @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
     var openSettings: () -> Void
 
@@ -11,7 +12,7 @@ struct CompactPopover: View {
                 HStack(spacing: 6) {
                     Text("Updated \(Format.clock(store.lastUpdated))")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .tallySecondary()
                     Button(action: store.refresh) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11, weight: .medium))
@@ -28,7 +29,7 @@ struct CompactPopover: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    SectionLabel(text: "TOP MODELS TODAY")
+                    SectionLabel(text: "Top models today")
                     Spacer()
                     Button("See all") {
                         store.detailTab = .models
@@ -37,7 +38,7 @@ struct CompactPopover: View {
                     }
                     .buttonStyle(.plain)
                     .font(.caption)
-                    .foregroundStyle(Color.accentColor)
+                    .tallyAccent()
                 }
                 ForEach(Array(store.ledger.todayModels.prefix(3))) { total in
                     compactModel(total)
@@ -63,20 +64,22 @@ struct CompactPopover: View {
         SpendCard {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    SectionLabel(text: "TODAY")
+                    SectionLabel(text: "Today")
                     Spacer()
                     Text(Format.percent(store.todayFraction))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .tallySecondary()
                 }
                 Text(store.money(store.ledger.todaySpend))
                     .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(store.dailyLevel.color)
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
+                BudgetStatus(level: store.dailyLevel, period: "daily")
                 Text("of \(store.money(store.dailyBudget)) daily budget")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                BudgetBar(fraction: store.todayFraction, tint: barTint(store.dailyLevel))
+                    .tallySecondary()
+                BudgetBar(fraction: store.todayFraction, tint: store.dailyLevel.fill(scheme))
             }
         }
     }
@@ -85,23 +88,25 @@ struct CompactPopover: View {
         SpendCard {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    SectionLabel(text: "THIS MONTH")
+                    SectionLabel(text: "This month")
                     Spacer()
                     Text(Format.percent(store.monthFraction))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .tallySecondary()
                 }
                 Text(store.money(store.ledger.monthSpend))
                     .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(store.monthlyLevel.color)
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
+                BudgetStatus(level: store.monthlyLevel, period: "monthly")
                 Text("of \(store.money(store.monthlyBudget)) monthly budget")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                BudgetBar(fraction: store.monthFraction, tint: barTint(store.monthlyLevel))
+                    .tallySecondary()
+                BudgetBar(fraction: store.monthFraction, tint: store.monthlyLevel.fill(scheme))
                 Text("Projected \(store.moneyCompact(store.ledger.projectedMonthEnd)) by \(Format.dayMonth(store.ledger.projectionDate))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .tallySecondary()
             }
         }
     }
@@ -121,13 +126,10 @@ struct CompactPopover: View {
             BudgetBar(
                 fraction: total.cost / max(store.ledger.todaySpend, 0.01),
                 tint: total.model.color,
-                height: 3
+                height: 3,
+                label: "percent of today’s spend"
             )
             .padding(.leading, 16)
         }
-    }
-
-    private func barTint(_ level: BudgetLevel) -> Color {
-        level == .ok ? .accentColor : level.color
     }
 }

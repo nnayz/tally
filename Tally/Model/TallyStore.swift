@@ -432,7 +432,7 @@ final class TallyStore {
         if monthly {
             title = level == .over ? "Monthly budget exceeded" : "Monthly budget at \(percent)%"
             let days = daysLeftInMonth()
-            body = "\(money(spent)) of \(money(budget)) · \(days) days remaining"
+            body = "\(money(spent)) of \(money(budget)) · \(String(localized: "^[\(days) day](inflect: true)")) remaining"
         } else if level == .over {
             title = "Daily budget exceeded"
             body = "\(money(spent)) of \(money(budget)) · tap to see cost drivers"

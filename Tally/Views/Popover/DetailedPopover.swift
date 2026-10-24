@@ -75,6 +75,7 @@ private struct OverviewTab: View {
         if store.shouldPresentAlert {
             BudgetBanner(store: store)
         }
+        SubscriptionSection(store: store)
         HStack(spacing: 8) {
             kpi("Today", amount: store.ledger.todaySpend, fraction: store.todayFraction, budget: store.dailyBudget, level: store.dailyLevel, period: "daily")
             kpi("This month", amount: store.ledger.monthSpend, fraction: store.monthFraction, budget: store.monthlyBudget, level: store.monthlyLevel, period: "monthly")

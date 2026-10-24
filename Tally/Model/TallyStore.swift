@@ -83,6 +83,13 @@ final class TallyStore {
     var modelCaps: [String: Double] {
         didSet { persist() }
     }
+    var enabledSourceIDs: [String] {
+        didSet {
+            persist()
+            reloadQuotas()
+        }
+    }
+    var quotas: [WidgetSource: QuotaReading] = [:]
 
     var gatewayURL: String {
         didSet { persist() }
@@ -145,6 +152,11 @@ final class TallyStore {
         } else {
             modelCaps = [:]
         }
+        if let saved = defaults.stringArray(forKey: Key.sources) {
+            enabledSourceIDs = saved
+        } else {
+            enabledSourceIDs = [WidgetSource.gateway.rawValue]
+        }
         gatewayURL = defaults.string(forKey: Key.gateway) ?? "https://gateway.example.com"
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
         accountEmail = "jane.doe@example.com"
@@ -160,7 +172,46 @@ final class TallyStore {
         }
         announcedDaily = dailyLevel
         announcedMonthly = monthlyLevel
+        #if DEBUG
+        QuotaReader.selfCheck()
+        #endif
         restartRefreshLoop()
+        if !quotaSources.isEmpty {
+            reloadQuotas()
+        }
+    }
+
+    var gatewayEnabled: Bool { enabledSourceIDs.contains(WidgetSource.gateway.rawValue) }
+
+    var quotaSources: [WidgetSource] {
+        WidgetSource.allCases.filter { $0 != .gateway && enabledSourceIDs.contains($0.rawValue) }
+    }
+
+    func sourceBinding(_ source: WidgetSource) -> Binding<Bool> {
+        Binding(
+            get: { self.enabledSourceIDs.contains(source.rawValue) },
+            set: { on in
+                if on {
+                    guard !self.enabledSourceIDs.contains(source.rawValue) else { return }
+                    self.enabledSourceIDs.append(source.rawValue)
+                } else {
+                    self.enabledSourceIDs.removeAll { $0 == source.rawValue }
+                }
+            }
+        )
+    }
+
+    func quotaLevel(_ percent: Double) -> BudgetLevel {
+        level(for: percent, budget: 100)
+    }
+
+    var menuLevel: BudgetLevel {
+        var worst: BudgetLevel = gatewayEnabled ? dailyLevel : .ok
+        for source in quotaSources {
+            guard let percent = quotas[source]?.percent else { continue }
+            worst = worse(worst, quotaLevel(percent))
+        }
+        return worst
     }
 
     var phase: SessionPhase {
@@ -182,7 +233,7 @@ final class TallyStore {
     }
 
     var shouldPresentAlert: Bool {
-        dailyLevel != .ok && !isSnoozed
+        gatewayEnabled && dailyLevel != .ok && !isSnoozed
     }
 
     var maskedAPIKey: String {
@@ -216,7 +267,8 @@ final class TallyStore {
     }
 
     func refresh() {
-        guard isSignedIn, !isLoading else { return }
+        reloadQuotas()
+        guard gatewayEnabled, isSignedIn, !isLoading else { return }
         isRefreshing = true
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "tally.reachability")
@@ -429,6 +481,7 @@ final class TallyStore {
     }
 
     private func considerNotifications(previousDaily: BudgetLevel? = nil, previousMonthly: BudgetLevel? = nil) {
+        guard gatewayEnabled else { return }
         let dailyBefore = previousDaily ?? announcedDaily
         let monthlyBefore = previousMonthly ?? announcedMonthly
         if dailyLevel != dailyBefore {
@@ -503,6 +556,44 @@ final class TallyStore {
         }
     }
 
+    private func worse(_ lhs: BudgetLevel, _ rhs: BudgetLevel) -> BudgetLevel {
+        func rank(_ level: BudgetLevel) -> Int {
+            switch level {
+            case .ok: 0
+            case .warning: 1
+            case .over: 2
+            }
+        }
+        return rank(lhs) >= rank(rhs) ? lhs : rhs
+    }
+
+    private var quotaTask: Task<Void, Never>?
+
+    private func reloadQuotas() {
+        let sources = quotaSources
+        guard !sources.isEmpty else {
+            quotas = [:]
+            return
+        }
+        quotaTask?.cancel()
+        quotaTask = Task { [weak self] in
+            var fetched: [WidgetSource: QuotaReading] = [:]
+            for source in sources {
+                fetched[source] = await QuotaReader.read(source)
+            }
+            guard let self, !Task.isCancelled else { return }
+            for source in sources {
+                guard let reading = fetched[source] else { continue }
+                if reading.percent == nil, !reading.unavailable, self.quotas[source]?.percent != nil {
+                    continue
+                }
+                self.quotas[source] = reading
+            }
+            self.quotas = self.quotas.filter { sources.contains($0.key) }
+            self.lastUpdated = Date()
+        }
+    }
+
     private func restartRefreshLoop() {
         refreshTask?.cancel()
         let seconds = refreshSeconds
@@ -549,6 +640,7 @@ final class TallyStore {
         defaults.set(snoozedUntil, forKey: Key.snooze)
         defaults.set(gatewayURL, forKey: Key.gateway)
         defaults.set(authMethod.rawValue, forKey: Key.auth)
+        defaults.set(enabledSourceIDs, forKey: Key.sources)
         if let data = try? JSONEncoder().encode(modelCaps) {
             defaults.set(data, forKey: Key.caps)
         }
@@ -571,6 +663,7 @@ final class TallyStore {
         static let caps = "modelCaps"
         static let gateway = "gatewayURL"
         static let auth = "authMethod"
+        static let sources = "enabledSources"
     }
 }
 

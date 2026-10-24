@@ -33,6 +33,18 @@ private struct GeneralSettings: View {
                         Text(style.title).tag(style)
                     }
                 }
+            }
+            Section {
+                ForEach(WidgetSource.allCases) { source in
+                    Toggle(source.title, isOn: store.sourceBinding(source))
+                }
+            } header: {
+                Text("Shown on the menu bar")
+            } footer: {
+                Text("Turn on only the plans you use. Gateway is spend from your gateway. Codex, Claude, Grok, and Cursor use the sign-in already on this Mac.")
+                    .tallySecondary()
+            }
+            Section {
                 Picker("Refresh interval", selection: $store.refreshSeconds) {
                     Text("Every 15 seconds").tag(15)
                     Text("Every 30 seconds").tag(30)

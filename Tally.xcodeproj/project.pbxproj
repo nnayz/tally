@@ -20,6 +20,7 @@
 		C3A6D544ECD17F2D21C2DD89 /* SessionStates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 273CEE41783C18436470CEC5 /* SessionStates.swift */; };
 		C8E0F3DC974C9276421522B8 /* PopoverRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE4F03DD336ADD86A627297 /* PopoverRoot.swift */; };
 		CB151F5C427E1996C7DD1B7F /* Format.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C0DB364E45DD085BFEF153 /* Format.swift */; };
+		D4E30AB13931F28677E23A87 /* WidgetSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D524BE158366BD822F57754 /* WidgetSources.swift */; };
 		D5F62C226C94A090A4A37A5E /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8916F2867D7493062B1DAC66 /* Components.swift */; };
 		F7E7AFDA206071E504D22E00 /* CompactPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB308FCF2C759BE6AFFC06C /* CompactPopover.swift */; };
 		FF6C3E328548A7270D83C745 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0438430608549D75B2F651AE /* SettingsView.swift */; };
@@ -29,6 +30,7 @@
 		0438430608549D75B2F651AE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0E91360750E6493DD7621468 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		109A68D54D2AA3C65E076A14 /* TallyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TallyStore.swift; sourceTree = "<group>"; };
+		1D524BE158366BD822F57754 /* WidgetSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSources.swift; sourceTree = "<group>"; };
 		273CEE41783C18436470CEC5 /* SessionStates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStates.swift; sourceTree = "<group>"; };
 		285C8B6F89C35811CF2B16B9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		4DCF1A5BC6FA366C4B658D35 /* Tally.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tally.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -62,6 +64,7 @@
 			children = (
 				DCEA15068E14AAD9E95A3B87 /* Ledger.swift */,
 				109A68D54D2AA3C65E076A14 /* TallyStore.swift */,
+				1D524BE158366BD822F57754 /* WidgetSources.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -220,6 +223,7 @@
 				35BBEA0B07AD308B03814152 /* TallyApp.swift in Sources */,
 				4F5F3CA20C294B6C24EF98D7 /* TallyStore.swift in Sources */,
 				345D2734606B6697BC84F179 /* UsageHistoryView.swift in Sources */,
+				D4E30AB13931F28677E23A87 /* WidgetSources.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -306,6 +310,10 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lsqlite3",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.nnayz.tally;
 				PRODUCT_NAME = Tally;
 				SDKROOT = macosx;
@@ -384,6 +392,10 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lsqlite3",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.nnayz.tally;
 				PRODUCT_NAME = Tally;

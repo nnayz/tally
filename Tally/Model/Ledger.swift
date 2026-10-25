@@ -153,7 +153,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "Overview"
         case .models: "Models"
-        case .conversations: "Conversations"
+        case .conversations: "Convos"
         case .requests: "Requests"
         }
     }

@@ -253,31 +253,7 @@ private struct ModelsTab: View {
             .tallyAccent()
         }
         SpendCard {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Model")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel("Model")
-                    Text("Req")
-                        .frame(width: 44, alignment: .trailing)
-                        .accessibilityLabel("Req")
-                    Text("$/1K req")
-                        .frame(width: 58, alignment: .trailing)
-                        .accessibilityLabel("$/1K req")
-                    Text("Cost")
-                        .frame(width: 72, alignment: .trailing)
-                        .accessibilityLabel("Cost")
-                }
-                .font(.caption2)
-                .tallySecondary()
-                .textCase(.uppercase)
-                .padding(.bottom, 6)
-                ForEach(totals) { total in
-                    Divider()
-                    modelRow(total, share: shares[total.id] ?? 0)
-                        .padding(.vertical, 6)
-                }
-            }
+            ModelsTable(store: store, totals: totals, shares: shares)
         }
     }
 
@@ -303,40 +279,122 @@ private struct ModelsTab: View {
         .clipShape(Capsule())
     }
 
+}
+
+/// One grid for the header and every model, so request, price, and cost share column edges.
+private struct ModelsTable: View {
+    @Bindable var store: TallyStore
+    var totals: [ModelTotal]
+    var shares: [String: Int]
+
+    private enum Line: Identifiable {
+        case rule(String)
+        case model(ModelTotal)
+
+        var id: String {
+            switch self {
+            case .rule(let key): "rule-\(key)"
+            case .model(let total): total.id
+            }
+        }
+    }
+
+    private var lines: [Line] {
+        var rows: [Line] = []
+        for total in totals {
+            if !rows.isEmpty {
+                rows.append(.rule(total.id))
+            }
+            rows.append(.model(total))
+        }
+        return rows
+    }
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
+            GridRow {
+                Text("Model")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Model")
+                Text("Req")
+                    .accessibilityLabel("Req")
+                Text("$/1K req")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel("$/1K req")
+                Text("Cost")
+                    .gridColumnAlignment(.trailing)
+                    .accessibilityLabel("Cost")
+            }
+            .font(.caption2)
+            .tallySecondary()
+            .textCase(.uppercase)
+            .padding(.bottom, 8)
+
+            ForEach(lines) { line in
+                switch line {
+                case .rule:
+                    GridRow {
+                        Divider()
+                            .gridCellColumns(4)
+                            .padding(.vertical, 6)
+                    }
+                case .model(let total):
+                    modelRow(total, share: shares[total.id] ?? 0)
+                }
+            }
+        }
+    }
+
     private func modelRow(_ total: ModelTotal, share: Int) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            HStack(spacing: 6) {
-                ModelDot(color: total.model.color)
-                VStack(alignment: .leading, spacing: 1) {
+        GridRow(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    ModelDot(color: total.model.color)
                     Text(total.model.rawValue)
                         .font(.subheadline.weight(.medium))
-                    Text(total.model.vendor)
+                        .lineLimit(1)
+                }
+                Text(total.model.vendor)
+                    .font(.caption2)
+                    .tallySecondary()
+                    .lineLimit(1)
+                    .padding(.leading, 14)
+                if let cap = store.cap(for: total.model), total.cost > cap {
+                    Text("Over \(store.moneyCompact(cap)) cap")
                         .font(.caption2)
-                        .tallySecondary()
-                    if let cap = store.cap(for: total.model), total.cost > cap {
-                        Text("Over \(store.moneyCompact(cap)) cap")
-                            .font(.caption2)
-                            .foregroundStyle(.primary)
-                    }
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .padding(.leading, 14)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(Format.count(total.requests))
-                .frame(width: 44, alignment: .trailing)
+
+            Text(total.requests, format: .number.grouping(.never))
+                .font(.caption)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
             Text(store.moneyCompact(total.perThousand))
-                .frame(width: 58, alignment: .trailing)
-            VStack(alignment: .trailing, spacing: 1) {
+                .font(.caption)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .trailing, spacing: 2) {
                 Text(store.money(total.cost))
-                    .fontWeight(.semibold)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
                 Text("\(share)%")
                     .font(.caption2)
                     .monospacedDigit()
                     .tallySecondary()
+                    .lineLimit(1)
             }
-            .frame(width: 72, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .font(.caption)
-        .monospacedDigit()
     }
 }
 

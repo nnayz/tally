@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum GatewayVersion: String, CaseIterable, Identifiable {
@@ -71,6 +72,22 @@ enum GatewayClient {
             message: "The spend URL and the key page must be different.",
             action: "Use a key page URL that is not the spend URL."
         )
+        static let unapproved = Failure(
+            message: "Confirm this spend host before the saved key is sent.",
+            action: "Review the spend host, then confirm that the saved key may be sent there."
+        )
+        static let privateAddress = Failure(
+            message: "This host is a private or metadata address. The key was not sent.",
+            action: "Use a public https spend URL. A private gateway needs a connector."
+        )
+        static let unresolved = Failure(
+            message: "Couldn’t resolve this host. The key was not sent.",
+            action: "Check the address and try again."
+        )
+        static let redirected = Failure(
+            message: "The gateway redirected away from the approved host. The key was not sent there.",
+            action: "Point the spend URL at the host that serves spend logs."
+        )
     }
 
     struct Read {
@@ -119,6 +136,10 @@ enum GatewayClient {
         if sameDestination(trimmed, keyPageURL) {
             return .failure(.sameDestination)
         }
+        if let failure = screen(spendURL: trimmed, keyPageURL: keyPageURL) {
+            return .failure(failure)
+        }
+        let approved = hostKey(of: trimmed)
 
         let start = windowStart(now)
         let paged = version == .v1_106_2
@@ -146,7 +167,7 @@ enum GatewayClient {
             request.timeoutInterval = 12
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            switch await send(request) {
+            switch await send(request, approvedHostKey: approved, keyPageURL: keyPageURL) {
             case .data(let data):
                 switch classify(data) {
                 case .loginPage:
@@ -171,6 +192,8 @@ enum GatewayClient {
                 }
             case .status(let code):
                 return .failure(.http(code))
+            case .redirect:
+                return .failure(.redirected)
             case .unreachable:
                 return .failure(.unreachable)
             }
@@ -319,6 +342,104 @@ enum GatewayClient {
         assert(unread.history == Failure.dailyTotals.message)
         assert(!unread.history.contains("Available"))
         assert(unread.synchronization == "Not synchronized yet")
+
+        assert(HostGuard.isBlockedAddress("127.0.0.1"))
+        assert(HostGuard.isBlockedAddress("10.1.2.3"))
+        assert(HostGuard.isBlockedAddress("192.168.1.5"))
+        assert(HostGuard.isBlockedAddress("172.16.0.1"))
+        assert(HostGuard.isBlockedAddress("172.31.255.255"))
+        assert(!HostGuard.isBlockedAddress("172.32.0.1"))
+        assert(HostGuard.isBlockedAddress("169.254.169.254"))
+        assert(HostGuard.isBlockedAddress("0.0.0.0"))
+        assert(HostGuard.isBlockedAddress("::1"))
+        assert(HostGuard.isBlockedAddress("fe80::1"))
+        assert(HostGuard.isBlockedAddress("fd00::1"))
+        assert(!HostGuard.isBlockedAddress("8.8.8.8"))
+        assert(!HostGuard.isBlockedAddress("2606:4700:4700::1111"))
+        assert(HostGuard.isBlockedName("metadata.google.internal"))
+        assert(HostGuard.isBlockedName("metadata"))
+        assert(!HostGuard.isBlockedName("llm.example.com"))
+        assert(HostGuard.classify("127.0.0.1") == .blocked)
+        assert(HostGuard.classify("localhost") == .blocked)
+        assert(HostGuard.classify("8.8.8.8") == .allowed)
+
+        let spend = URL(string: "https://llm.example.com/spend/logs/v2")!
+        let elsewhere = URL(string: "https://other.example.com/spend/logs/v2")!
+        let insecure = URL(string: "http://llm.example.com/spend/logs/v2")!
+        let keyPage = "https://llm.example.com/key"
+        let approvedHost = hostKey(of: spend.absoluteString)
+        assert(redirectAllowed(next: spend, approvedHostKey: approvedHost, keyPageURL: keyPage))
+        assert(!redirectAllowed(next: elsewhere, approvedHostKey: approvedHost, keyPageURL: keyPage))
+        assert(!redirectAllowed(next: insecure, approvedHostKey: approvedHost, keyPageURL: keyPage))
+        assert(!redirectAllowed(next: URL(string: keyPage)!, approvedHostKey: approvedHost, keyPageURL: keyPage))
+
+        let profileSecret = "sk-profile-secret"
+        let profile = ConnectionProfile(
+            format: ConnectionProfile.formatVersion,
+            organization: "Example",
+            adapter: GatewayVersion.v1_106_2.rawValue,
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(
+                    url: "https://llm.example.com/spend/logs/v2",
+                    capability: "spend",
+                    credential: "apiKey"
+                ),
+            ],
+            keyPageURL: "https://llm.example.com/key",
+            permissions: ["Read spend logs"],
+            helpURL: "https://llm.example.com/help",
+            scope: "this key",
+            window: "Earlier of this month and 30 days ago",
+            freshness: "60 seconds"
+        )
+        guard case .success(let encoded) = profile.encoded() else {
+            assertionFailure("encode profile")
+            return
+        }
+        let encodedText = String(decoding: encoded, as: UTF8.self)
+        assert(!encodedText.contains(profileSecret))
+        assert(!encodedText.contains("master"))
+        guard case .success(let decoded) = ConnectionProfile.decode(encoded) else {
+            assertionFailure("decode profile")
+            return
+        }
+        assert(decoded == profile)
+        guard case .success(let again) = decoded.encoded() else {
+            assertionFailure("re-encode profile")
+            return
+        }
+        guard case .success(let roundTrip) = ConnectionProfile.decode(again) else {
+            assertionFailure("round trip")
+            return
+        }
+        assert(roundTrip == profile)
+        assert(!String(decoding: again, as: UTF8.self).contains(profileSecret))
+
+        let poisoned = Data(#"{"format":1,"apiKey":"sk-profile-secret","adapter":"1.106.2"}"#.utf8)
+        guard case .failure = ConnectionProfile.decode(poisoned) else {
+            assertionFailure("secret field")
+            return
+        }
+        let local = ConnectionProfile(
+            format: 1,
+            organization: "Local",
+            adapter: "1.49.6",
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(url: "https://127.0.0.1/spend/logs", capability: "spend", credential: "apiKey"),
+            ],
+            keyPageURL: "https://127.0.0.1/key",
+            permissions: ["Read spend logs"],
+            helpURL: "",
+            scope: "this key",
+            window: "",
+            freshness: ""
+        )
+        guard case .failure = local.encoded() else {
+            assertionFailure("private profile")
+            return
+        }
     }
     #endif
 
@@ -483,6 +604,55 @@ enum GatewayClient {
         )
     }
 
+    static func hostKey(of urlString: String) -> String {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), let host = url.host, !host.isEmpty else { return "" }
+        let port = url.port ?? (url.scheme == "https" ? 443 : 80)
+        return "\(host.lowercased())|\(port)"
+    }
+
+    static func origin(of urlString: String) -> String {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed),
+              components.scheme == "https",
+              components.host?.isEmpty == false else { return "" }
+        components.user = nil
+        components.password = nil
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? ""
+    }
+
+    static func redirectAllowed(next: URL, approvedHostKey: String, keyPageURL: String) -> Bool {
+        guard next.scheme == "https", !approvedHostKey.isEmpty else { return false }
+        guard hostKey(of: next.absoluteString) == approvedHostKey else { return false }
+        if sameDestination(next.absoluteString, keyPageURL) { return false }
+        return true
+    }
+
+    /// Public https hosts only. A private or metadata address never receives the key.
+    static func screen(spendURL: String, keyPageURL: String, helpURL: String = "") -> Failure? {
+        let spend = spendURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: spend), url.scheme == "https", url.host?.isEmpty == false else {
+            return .invalidURL
+        }
+        if sameDestination(spend, keyPageURL) { return .sameDestination }
+        if let failure = HostGuard.failure(for: url.host ?? "") { return failure }
+        if let failure = screenLink(keyPageURL, label: "key page URL") { return failure }
+        if let failure = screenLink(helpURL, label: "help URL") { return failure }
+        return nil
+    }
+
+    static func screenLink(_ raw: String, label: String) -> Failure? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        guard let url = URL(string: trimmed), url.scheme == "https", let host = url.host, !host.isEmpty else {
+            return Failure(message: "Enter an https \(label).", action: "Use an https \(label).")
+        }
+        return HostGuard.failure(for: host)
+    }
+
     static func reportHost(_ spendURL: String) -> String {
         let trimmed = spendURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed),
@@ -516,14 +686,55 @@ enum GatewayClient {
     private enum Fetch {
         case data(Data)
         case status(Int)
+        case redirect
         case unreachable
     }
 
-    private static func send(_ request: URLRequest) async -> Fetch {
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+    private static func send(_ request: URLRequest, approvedHostKey: String, keyPageURL: String) async -> Fetch {
+        let pin = RedirectPin(approvedHostKey: approvedHostKey, keyPageURL: keyPageURL)
+        let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        guard let (data, response) = try? await session.data(for: request),
               let http = response as? HTTPURLResponse else { return .unreachable }
+        if pin.rejected || (300..<400).contains(http.statusCode) { return .redirect }
         guard (200..<300).contains(http.statusCode) else { return .status(http.statusCode) }
         return .data(data)
+    }
+}
+
+private final class RedirectPin: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    let approvedHostKey: String
+    let keyPageURL: String
+    private let lock = NSLock()
+    private var sawRejection = false
+
+    init(approvedHostKey: String, keyPageURL: String) {
+        self.approvedHostKey = approvedHostKey
+        self.keyPageURL = keyPageURL
+    }
+
+    var rejected: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return sawRejection
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let next = request.url,
+              GatewayClient.redirectAllowed(next: next, approvedHostKey: approvedHostKey, keyPageURL: keyPageURL) else {
+            lock.lock()
+            sawRejection = true
+            lock.unlock()
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 
@@ -586,5 +797,266 @@ struct CapabilityReport: Equatable {
             synchronization: synchronization,
             action: failure?.action
         )
+    }
+}
+
+enum HostGuard {
+    enum Verdict: Equatable {
+        case allowed
+        case blocked
+        case unresolved
+    }
+
+    static func failure(for host: String) -> GatewayClient.Failure? {
+        switch classify(host) {
+        case .allowed: nil
+        case .blocked: .privateAddress
+        case .unresolved: .unresolved
+        }
+    }
+
+    static func classify(_ host: String) -> Verdict {
+        let name = normalized(host)
+        if name.isEmpty || isBlockedName(name) { return .blocked }
+        if isNumeric(name) { return isBlockedAddress(name) ? .blocked : .allowed }
+        guard let addresses = lookup(name), !addresses.isEmpty else { return .unresolved }
+        if addresses.contains(where: isBlockedAddress) { return .blocked }
+        return .allowed
+    }
+
+    static func isBlockedName(_ host: String) -> Bool {
+        let name = normalized(host)
+        return name.isEmpty || name == "metadata" || name == "instance-data" || name == "metadata.google.internal"
+    }
+
+    static func isNumeric(_ host: String) -> Bool {
+        var v4 = in_addr()
+        if inet_pton(AF_INET, host, &v4) == 1 { return true }
+        var v6 = in6_addr()
+        return inet_pton(AF_INET6, stripZone(host), &v6) == 1
+    }
+
+    static func isBlockedAddress(_ presentation: String) -> Bool {
+        let bare = stripZone(presentation)
+        var v4 = in_addr()
+        if inet_pton(AF_INET, bare, &v4) == 1 {
+            let bytes = withUnsafeBytes(of: v4.s_addr) { Array($0) }
+            return ipv4Blocked(bytes)
+        }
+        var v6 = in6_addr()
+        guard inet_pton(AF_INET6, bare, &v6) == 1 else { return true }
+        let bytes = withUnsafeBytes(of: v6) { Array($0) }
+        return ipv6Blocked(bytes)
+    }
+
+    private static func normalized(_ host: String) -> String {
+        host.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+    }
+
+    private static func stripZone(_ host: String) -> String {
+        host.split(separator: "%", maxSplits: 1).first.map(String.init) ?? host
+    }
+
+    private static func ipv4Blocked(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 4 else { return true }
+        let a = bytes[0]
+        let b = bytes[1]
+        if a == 0 || a == 10 || a == 127 { return true }
+        if a == 169 && b == 254 { return true }
+        if a == 172 && (16...31).contains(Int(b)) { return true }
+        if a == 192 && b == 168 { return true }
+        if bytes == [255, 255, 255, 255] { return true }
+        return false
+    }
+
+    private static func ipv6Blocked(_ bytes: [UInt8]) -> Bool {
+        guard bytes.count == 16 else { return true }
+        if bytes.allSatisfy({ $0 == 0 }) { return true }
+        if bytes.dropLast().allSatisfy({ $0 == 0 }) && bytes[15] == 1 { return true }
+        if bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 { return true }
+        if (bytes[0] & 0xfe) == 0xfc { return true }
+        let mapped = bytes.prefix(10).allSatisfy { $0 == 0 } && bytes[10] == 0xff && bytes[11] == 0xff
+        if mapped { return ipv4Blocked(Array(bytes.suffix(4))) }
+        return false
+    }
+
+    private static func lookup(_ host: String) -> [String]? {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_flags = AI_ADDRCONFIG
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &info) == 0, let info else { return nil }
+        defer { freeaddrinfo(info) }
+        var found: [String] = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = info
+        while let current = cursor {
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(
+                current.pointee.ai_addr,
+                current.pointee.ai_addrlen,
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 {
+                found.append(String(cString: buffer))
+            }
+            cursor = current.pointee.ai_next
+        }
+        return found
+    }
+}
+
+struct ConnectionProfile: Codable, Equatable {
+    static let formatVersion = 1
+
+    var format: Int
+    var organization: String
+    var adapter: String
+    var auth: String
+    var endpoints: [Endpoint]
+    var keyPageURL: String
+    var permissions: [String]
+    var helpURL: String
+    var scope: String
+    var window: String
+    var freshness: String
+
+    struct Endpoint: Codable, Equatable {
+        var url: String
+        var capability: String
+        var credential: String
+    }
+
+    var spendURL: String { endpoints.first?.url ?? "" }
+
+    func encoded() -> Result<Data, GatewayClient.Failure> {
+        if let failure = validated() { return .failure(failure) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            return .success(try encoder.encode(self))
+        } catch {
+            return .failure(GatewayClient.Failure(
+                message: "Couldn’t write the profile.",
+                action: "Try the export again."
+            ))
+        }
+    }
+
+    static func decode(_ data: Data) -> Result<ConnectionProfile, GatewayClient.Failure> {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else {
+            return .failure(GatewayClient.Failure(
+                message: "This file is not a connection profile.",
+                action: "Choose the JSON profile exported from Tally."
+            ))
+        }
+        if containsSecret(object) {
+            return .failure(GatewayClient.Failure(
+                message: "This profile contains a secret. Remove it and share the file again.",
+                action: "Delete the key from the file. Each person uses their own."
+            ))
+        }
+        guard let profile = try? JSONDecoder().decode(ConnectionProfile.self, from: data) else {
+            return .failure(GatewayClient.Failure(
+                message: "This file is not a connection profile.",
+                action: "Choose the JSON profile exported from Tally."
+            ))
+        }
+        if let failure = profile.validated() { return .failure(failure) }
+        return .success(profile)
+    }
+
+    func validated() -> GatewayClient.Failure? {
+        if format != Self.formatVersion {
+            return GatewayClient.Failure(
+                message: "This profile version is not supported.",
+                action: "Ask the operator for a current Tally profile."
+            )
+        }
+        if GatewayVersion(rawValue: adapter) == nil {
+            return GatewayClient.Failure(
+                message: "This profile names an unsupported LiteLLM version.",
+                action: "Use LiteLLM 1.49.6 or 1.106.2."
+            )
+        }
+        if auth != "apiKey" {
+            return GatewayClient.Failure(
+                message: "This profile uses an authentication method Tally does not support.",
+                action: "Use a personal API key."
+            )
+        }
+        guard endpoints.count == 1, let endpoint = endpoints.first else {
+            return GatewayClient.Failure(
+                message: "This profile must name one spend endpoint.",
+                action: "Include the spend-log URL only."
+            )
+        }
+        if endpoint.capability != "spend" || endpoint.credential != "apiKey" {
+            return GatewayClient.Failure(
+                message: "This profile asks Tally to call an endpoint it does not use.",
+                action: "Name the spend-log URL and the apiKey slot."
+            )
+        }
+        if let failure = literal(endpoint.url, label: "spend URL") { return failure }
+        if let failure = literal(keyPageURL, label: "key page URL", emptyAllowed: true) { return failure }
+        if !keyPageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           GatewayClient.sameDestination(endpoint.url, keyPageURL) {
+            return .sameDestination
+        }
+        if let failure = literal(helpURL, label: "help URL", emptyAllowed: true) { return failure }
+        if organization.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return GatewayClient.Failure(
+                message: "This profile needs an organization name.",
+                action: "Add the organization name."
+            )
+        }
+        let named = permissions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if named.isEmpty || named.contains("") {
+            return GatewayClient.Failure(
+                message: "This profile needs the access it is requesting.",
+                action: "Name the permission, such as reading spend logs."
+            )
+        }
+        if !["this key", "this user", "team"].contains(scope) {
+            return GatewayClient.Failure(
+                message: "This profile’s scope must be this key, this user, or team.",
+                action: "Set the scope to one of those."
+            )
+        }
+        return nil
+    }
+
+    private func literal(_ raw: String, label: String, emptyAllowed: Bool = false) -> GatewayClient.Failure? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return emptyAllowed ? nil : .invalidURL
+        }
+        guard let url = URL(string: trimmed), url.scheme == "https", let host = url.host, !host.isEmpty else {
+            return GatewayClient.Failure(message: "Enter an https \(label).", action: "Use an https \(label).")
+        }
+        if HostGuard.isBlockedName(host) || (HostGuard.isNumeric(host) && HostGuard.isBlockedAddress(host)) {
+            return .privateAddress
+        }
+        return nil
+    }
+
+    private static func containsSecret(_ json: Any) -> Bool {
+        let banned: Set<String> = [
+            "apikey", "api_key", "token", "secret", "password", "authorization",
+            "bearer", "master_key", "masterkey", "access_token", "refresh_token",
+        ]
+        if let object = json as? [String: Any] {
+            for (key, value) in object {
+                if banned.contains(key.lowercased()) || containsSecret(value) { return true }
+            }
+            return false
+        }
+        if let list = json as? [Any] {
+            return list.contains(where: containsSecret)
+        }
+        return false
     }
 }

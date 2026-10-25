@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SignInView: View {
     @Bindable var store: TallyStore
@@ -30,7 +31,7 @@ struct SignInView: View {
             Text("Connect your LLM Gateway")
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text("Open the key page, copy your virtual key, and paste it here.")
+            Text("Use a virtual key that can read spend logs. Do not paste the gateway master key.")
                 .font(.subheadline)
                 .tallySecondary()
                 .multilineTextAlignment(.center)
@@ -62,6 +63,8 @@ struct SignInView: View {
                     .tallySecondary()
                 TextField("https://gateway.example.com/key", text: $store.keyPageURL)
                     .textFieldStyle(.roundedBorder)
+                ProfileSummary(store: store)
+                    .padding(.top, 8)
             }
             .padding(.top, 18)
 
@@ -108,6 +111,13 @@ struct SignInView: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
+            Button("Import profile…") {
+                apiKeyError = ProfileFile.importInto(store)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
 
             Text("An API key is stored in the macOS Keychain.")
                 .font(.caption)
@@ -148,7 +158,7 @@ struct EmptyUsageView: View {
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
             Button("Refresh", action: store.refresh)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -191,10 +201,12 @@ struct FailedUsageView: View {
             Text(store.loadError ?? "Couldn’t reach the gateway.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
-            Button("Retry", action: store.reloadSpend)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
+            if store.loadFailure != .unapproved {
+                Button("Retry", action: store.reloadSpend)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            }
             Button("Sign out") {
                 store.signOut()
             }
@@ -210,6 +222,7 @@ struct CapabilityStatus: View {
     var report: CapabilityReport
     var alwaysCopy: Bool
     var copy: () -> Void
+    var approve: () async -> String? = { nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -217,6 +230,14 @@ struct CapabilityStatus: View {
             statusLine("Models", report.models)
             statusLine("Request history", report.history)
             statusLine("Last synchronization", report.synchronization)
+            if report.action == GatewayClient.Failure.unapproved.action {
+                Button("Send the saved key to this host") {
+                    Task { _ = await approve() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 4)
+            }
             if alwaysCopy || report.action != nil {
                 Button("Copy report", action: copy)
                     .buttonStyle(.bordered)
@@ -232,5 +253,48 @@ struct CapabilityStatus: View {
             .font(.caption)
             .tallySecondary()
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+struct ProfileSummary: View {
+    var store: TallyStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Source: \(store.profileSource)")
+            Text(store.organization.isEmpty ? "Organization not set" : store.organization)
+            Text("Spend host: \(store.spendHostLabel)")
+            Text("Key page: \(store.keyPageHostLabel)")
+            Text("Access: \(store.profilePermissions.joined(separator: ", ")). Scope: \(store.scopeTitle).")
+            Text("The key is sent only to the spend host.")
+        }
+        .font(.caption)
+        .tallySecondary()
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+enum ProfileFile {
+    @MainActor
+    static func importInto(_ store: TallyStore) -> String? {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return store.importProfile(from: url)
+    }
+
+    @MainActor
+    static func exportFrom(_ store: TallyStore) -> String? {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "tally-profile.json"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return store.exportProfile(to: url)
     }
 }

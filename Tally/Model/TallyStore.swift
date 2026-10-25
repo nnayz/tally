@@ -100,32 +100,63 @@ final class TallyStore {
 
     var gatewayURL: String {
         didSet {
+            noteManualEdit()
             persist()
-            guard ready else { return }
+            guard ready, !applyingProfile else { return }
             reloadSpend()
         }
     }
     var gatewayVersion: GatewayVersion {
         didSet {
             let previous = GatewayClient.presetSpendURL(gatewayURL, version: oldValue)
-            if spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines) == previous {
+            if !applyingProfile, spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines) == previous {
                 spendURLCustom = ""
             }
+            noteManualEdit()
             persist()
-            guard ready else { return }
+            guard ready, !applyingProfile else { return }
             reloadSpend()
         }
     }
     var spendURLCustom: String {
         didSet {
+            noteManualEdit()
             persist()
-            guard ready else { return }
+            guard ready, !applyingProfile else { return }
             reloadSpend()
         }
     }
     var keyPageURL: String {
+        didSet {
+            noteManualEdit()
+            persist()
+        }
+    }
+    var organization: String {
         didSet { persist() }
     }
+    var profileScope: String {
+        didSet { persist() }
+    }
+    var profilePermissions: [String] {
+        didSet { persist() }
+    }
+    var helpURL: String {
+        didSet { persist() }
+    }
+    var profileWindow: String {
+        didSet { persist() }
+    }
+    var profileFreshness: String {
+        didSet { persist() }
+    }
+    var profileSource: String {
+        didSet { persist() }
+    }
+    var approvedHostKey: String {
+        didSet { persist() }
+    }
+    private var applyingProfile = false
     var authMethod: AuthMethod {
         didSet { persist() }
     }
@@ -137,6 +168,31 @@ final class TallyStore {
         let custom = spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty { return custom }
         return GatewayClient.presetSpendURL(gatewayURL, version: gatewayVersion)
+    }
+
+    var keyApproved: Bool {
+        let key = GatewayClient.hostKey(of: spendURL)
+        return !key.isEmpty && key == approvedHostKey
+    }
+
+    var spendHostLabel: String {
+        let host = GatewayClient.reportHost(spendURL)
+        return host == "unknown" ? "Not set" : host
+    }
+
+    var keyPageHostLabel: String {
+        let page = keyPageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if page.isEmpty { return "Not set" }
+        let host = GatewayClient.reportHost(page)
+        return host == "unknown" ? "Not set" : host
+    }
+
+    var scopeTitle: String {
+        switch profileScope {
+        case "this user": "This user"
+        case "team": "Team"
+        default: "This key"
+        }
     }
 
     var spendURLBinding: Binding<String> {
@@ -213,6 +269,15 @@ final class TallyStore {
         gatewayVersion = GatewayVersion(rawValue: defaults.string(forKey: Key.version) ?? "") ?? .v1_106_2
         spendURLCustom = defaults.string(forKey: Key.spendURL) ?? ""
         keyPageURL = defaults.string(forKey: Key.keyPage) ?? ""
+        organization = defaults.string(forKey: Key.organization) ?? ""
+        let storedScope = defaults.string(forKey: Key.profileScope) ?? "this key"
+        profileScope = ["this key", "this user", "team"].contains(storedScope) ? storedScope : "this key"
+        profilePermissions = defaults.stringArray(forKey: Key.profilePermissions) ?? ["Read spend logs"]
+        helpURL = defaults.string(forKey: Key.helpURL) ?? ""
+        profileWindow = defaults.string(forKey: Key.profileWindow) ?? ""
+        profileFreshness = defaults.string(forKey: Key.profileFreshness) ?? ""
+        profileSource = defaults.string(forKey: Key.profileSource) ?? "Entered on this Mac"
+        approvedHostKey = defaults.string(forKey: Key.approvedHost) ?? ""
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
         let storedKey = KeychainStore.string(account: "apiKey")
         if storedKey == "tally-sample-3f9a" {
@@ -240,10 +305,7 @@ final class TallyStore {
             reloadQuotas()
         }
         ready = true
-        if isSignedIn {
-            isLoadingUsage = true
-            Task { await loadGateway() }
-        }
+        reloadSpend()
     }
 
     var gatewayEnabled: Bool { enabledSourceIDs.contains(WidgetSource.gateway.rawValue) }
@@ -354,6 +416,9 @@ final class TallyStore {
         if GatewayClient.sameDestination(page, spendURL) {
             return "The spend URL and the key page must be different."
         }
+        if let failure = GatewayClient.screenLink(page, label: "key page URL") {
+            return failure.message
+        }
         NSWorkspace.shared.open(url)
         return nil
     }
@@ -361,13 +426,18 @@ final class TallyStore {
     func signIn(apiKey enteredKey: String) async -> String? {
         let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter an API key to continue." }
+        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+            return failure.message
+        }
         guard KeychainStore.set(trimmed, account: "apiKey") else {
             return "Couldn’t save the API key to the Keychain."
         }
         apiKey = trimmed
         authMethod = .apiKey
+        approvedHostKey = GatewayClient.hostKey(of: spendURL)
         if let error = await loadGateway() {
             apiKey = ""
+            approvedHostKey = ""
             KeychainStore.remove(account: "apiKey")
             loadError = nil
             loadFailure = nil
@@ -387,6 +457,7 @@ final class TallyStore {
         loadFailure = nil
         loadNotice = nil
         lastUpdated = nil
+        approvedHostKey = ""
         isLoadingUsage = false
         loadGeneration += 1
         ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
@@ -404,6 +475,7 @@ final class TallyStore {
     func replaceAPIKey(_ value: String) async -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter an API key to continue." }
+        guard keyApproved else { return GatewayClient.Failure.unapproved.message }
         let previous = apiKey
         guard KeychainStore.set(trimmed, account: "apiKey") else {
             return "Couldn’t save the API key to the Keychain."
@@ -664,11 +736,23 @@ final class TallyStore {
 
     func reloadSpend() {
         guard gatewayEnabled, isSignedIn, !apiKey.isEmpty else { return }
+        guard keyApproved else {
+            loadError = GatewayClient.Failure.unapproved.message
+            loadFailure = .unapproved
+            loadNotice = nil
+            return
+        }
         Task { await loadGateway() }
     }
 
     @discardableResult
     func loadGateway() async -> String? {
+        guard keyApproved else {
+            loadError = GatewayClient.Failure.unapproved.message
+            loadFailure = .unapproved
+            loadNotice = nil
+            return loadError
+        }
         loadGeneration += 1
         let generation = loadGeneration
         isLoadingUsage = true
@@ -719,6 +803,112 @@ final class TallyStore {
         let board = NSPasteboard.general
         board.clearContents()
         board.setString(capabilityReport.text, forType: .string)
+    }
+
+    func approveSpendHost() async -> String? {
+        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+            loadError = failure.message
+            loadFailure = failure
+            loadNotice = nil
+            return failure.message
+        }
+        approvedHostKey = GatewayClient.hostKey(of: spendURL)
+        return await loadGateway()
+    }
+
+    func importProfile(from url: URL) -> String? {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            return "Couldn’t read the profile."
+        }
+        switch ConnectionProfile.decode(data) {
+        case .failure(let failure):
+            return failure.message
+        case .success(let profile):
+            if let failure = GatewayClient.screen(
+                spendURL: profile.spendURL,
+                keyPageURL: profile.keyPageURL,
+                helpURL: profile.helpURL
+            ) {
+                return failure.message
+            }
+            apply(profile, source: url.lastPathComponent)
+            return nil
+        }
+    }
+
+    func exportProfile(to url: URL) -> String? {
+        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+            return failure.message
+        }
+        switch makeProfile().encoded() {
+        case .failure(let failure):
+            return failure.message
+        case .success(let data):
+            if !apiKey.isEmpty, String(decoding: data, as: UTF8.self).contains(apiKey) {
+                return "The profile contained the API key and was not written."
+            }
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                return "Couldn’t write the profile."
+            }
+            return nil
+        }
+    }
+
+    private func makeProfile() -> ConnectionProfile {
+        let host = GatewayClient.reportHost(spendURL)
+        let name = organization.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scope = ["this key", "this user", "team"].contains(profileScope) ? profileScope : "this key"
+        return ConnectionProfile(
+            format: ConnectionProfile.formatVersion,
+            organization: name.isEmpty ? host : name,
+            adapter: gatewayVersion.rawValue,
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(url: spendURL, capability: "spend", credential: "apiKey"),
+            ],
+            keyPageURL: keyPageURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            permissions: profilePermissions.isEmpty ? ["Read spend logs"] : profilePermissions,
+            helpURL: helpURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            scope: scope,
+            window: profileWindow.isEmpty ? "Earlier of this month and 30 days ago" : profileWindow,
+            freshness: profileFreshness.isEmpty ? "\(refreshSeconds) seconds" : profileFreshness
+        )
+    }
+
+    private func apply(_ profile: ConnectionProfile, source: String) {
+        applyingProfile = true
+        organization = profile.organization
+        profileScope = profile.scope
+        profilePermissions = profile.permissions
+        helpURL = profile.helpURL
+        profileWindow = profile.window
+        profileFreshness = profile.freshness
+        profileSource = source
+        if let version = GatewayVersion(rawValue: profile.adapter) {
+            gatewayVersion = version
+        }
+        let origin = GatewayClient.origin(of: profile.spendURL)
+        if !origin.isEmpty { gatewayURL = origin }
+        let preset = GatewayClient.presetSpendURL(gatewayURL, version: gatewayVersion)
+        spendURLCustom = profile.spendURL == preset ? "" : profile.spendURL
+        keyPageURL = profile.keyPageURL
+        applyingProfile = false
+        if isSignedIn, !apiKey.isEmpty, !keyApproved {
+            loadError = GatewayClient.Failure.unapproved.message
+            loadFailure = .unapproved
+            loadNotice = nil
+        } else {
+            reloadSpend()
+        }
+    }
+
+    private func noteManualEdit() {
+        guard ready, !applyingProfile, profileSource != "Entered on this Mac" else { return }
+        profileSource = "Entered on this Mac"
     }
 
     func spendClock(stale: Bool, livePrefix: String = "Updated") -> String {
@@ -776,6 +966,14 @@ final class TallyStore {
         defaults.set(gatewayVersion.rawValue, forKey: Key.version)
         defaults.set(spendURLCustom, forKey: Key.spendURL)
         defaults.set(keyPageURL, forKey: Key.keyPage)
+        defaults.set(organization, forKey: Key.organization)
+        defaults.set(profileScope, forKey: Key.profileScope)
+        defaults.set(profilePermissions, forKey: Key.profilePermissions)
+        defaults.set(helpURL, forKey: Key.helpURL)
+        defaults.set(profileWindow, forKey: Key.profileWindow)
+        defaults.set(profileFreshness, forKey: Key.profileFreshness)
+        defaults.set(profileSource, forKey: Key.profileSource)
+        defaults.set(approvedHostKey, forKey: Key.approvedHost)
         defaults.set(authMethod.rawValue, forKey: Key.auth)
         defaults.set(enabledSourceIDs, forKey: Key.sources)
         if let data = try? JSONEncoder().encode(modelCaps) {
@@ -802,6 +1000,14 @@ final class TallyStore {
         static let version = "gatewayVersion"
         static let spendURL = "spendURLCustom"
         static let keyPage = "keyPageURL"
+        static let organization = "organization"
+        static let profileScope = "profileScope"
+        static let profilePermissions = "profilePermissions"
+        static let helpURL = "helpURL"
+        static let profileWindow = "profileWindow"
+        static let profileFreshness = "profileFreshness"
+        static let profileSource = "profileSource"
+        static let approvedHost = "approvedSpendHost"
         static let auth = "authMethod"
         static let sources = "enabledSources"
     }

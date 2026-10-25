@@ -135,7 +135,7 @@ private struct GatewaySettings: View {
                                 }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("This removes the saved API key from Keychain. Revoke it at the gateway if you no longer want it to work.")
+                                Text("This removes the saved key from Keychain. If an operator issued it, Tally asks the operator to revoke it.")
                             }
                     }
                 }
@@ -162,6 +162,10 @@ private struct GatewaySettings: View {
                 TextField("Spend URL", text: store.spendURLBinding)
                 TextField("Key page URL", text: $store.keyPageURL)
                 TextField("Help URL", text: $store.helpURL)
+                TextField("Authorization URL", text: $store.authorizationURL)
+                TextField("Token URL", text: $store.tokenURL)
+                TextField("Revocation URL", text: $store.revocationURL)
+                TextField("Client ID", text: $store.clientID)
                 LabeledContent("Profile") {
                     HStack {
                         Button("Import…") { keyError = ProfileFile.importInto(store) }
@@ -191,6 +195,17 @@ private struct GatewaySettings: View {
                     Button("Get a key") {
                         keyError = store.openKeyPage()
                     }
+                }
+                if store.showsExchange {
+                    LabeledContent("Sign in") {
+                        Button("Sign in") {
+                            keyError = store.beginTrackingSignIn()
+                        }
+                    }
+                }
+                if let authError = store.authError {
+                    Text(authError)
+                        .foregroundStyle(.primary)
                 }
                 LabeledContent("API key") {
                     if replacingKey {

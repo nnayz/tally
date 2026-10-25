@@ -44,6 +44,11 @@ struct MenuBarLabel: View {
         .accessibilityLabel(accessibilityText)
         .onAppear {
             SetupLinks.install { url in
+                if url.host?.lowercased() == "callback" {
+                    Task { store.authError = await store.completeTrackingSignIn(url) }
+                    NSApp.activate()
+                    return
+                }
                 store.openSetupLink(url)
                 NSApp.activate()
                 openWindow(id: TallyWindow.connect)

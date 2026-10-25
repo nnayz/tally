@@ -69,7 +69,7 @@ struct TallyApp: App {
                 .onOpenURL { SetupLinks.receive($0) }
         }
         .defaultSize(width: 360, height: 640)
-        .handlesExternalEvents(matching: ["connect"])
+        .handlesExternalEvents(matching: ["connect", "callback"])
 
         Settings {
             SettingsRoot(store: store)

@@ -1,0 +1,21 @@
+{
+  "adapter" : "1.106.2",
+  "auth" : "apiKey",
+  "endpoints" : [
+    {
+      "capability" : "spend",
+      "credential" : "apiKey",
+      "url" : "https://example.com/spend/logs/v2"
+    }
+  ],
+  "format" : 1,
+  "freshness" : "60 seconds",
+  "helpURL" : "https://example.com/help",
+  "keyPageURL" : "https://example.com/key",
+  "organization" : "Example Gateway",
+  "permissions" : [
+    "Read spend logs"
+  ],
+  "scope" : "this key",
+  "window" : "Earlier of this month and 30 days ago"
+}

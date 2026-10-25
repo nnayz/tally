@@ -30,7 +30,7 @@ struct CompactPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if store.gatewayEnabled {
-                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
+                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
             }
 
             if store.gatewayEnabled {

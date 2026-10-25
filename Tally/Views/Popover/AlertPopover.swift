@@ -17,7 +17,7 @@ struct AlertPopover: View {
                     .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
             BudgetBanner(store: store)
             todayCard
             monthCard

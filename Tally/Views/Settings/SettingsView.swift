@@ -122,7 +122,8 @@ private struct GatewaySettings: View {
                             CapabilityStatus(
                                 report: store.capabilityReport,
                                 alwaysCopy: true,
-                                copy: store.copyCapabilityReport
+                                copy: store.copyCapabilityReport,
+                                approve: store.approveSpendHost
                             )
                         }
                         Spacer()
@@ -133,7 +134,7 @@ private struct GatewaySettings: View {
                                 }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("This removes the saved API key from Keychain.")
+                                Text("This removes the saved API key from Keychain. Revoke it at the gateway if you no longer want it to work.")
                             }
                     }
                 }
@@ -144,6 +145,13 @@ private struct GatewaySettings: View {
                 }
             }
             Section {
+                ProfileSummary(store: store)
+                TextField("Organization", text: $store.organization)
+                Picker("Scope", selection: $store.profileScope) {
+                    Text("This key").tag("this key")
+                    Text("This user").tag("this user")
+                    Text("Team").tag("team")
+                }
                 TextField("Gateway URL", text: $store.gatewayURL)
                 Picker("LiteLLM", selection: $store.gatewayVersion) {
                     ForEach(GatewayVersion.allCases) { version in
@@ -152,6 +160,13 @@ private struct GatewaySettings: View {
                 }
                 TextField("Spend URL", text: store.spendURLBinding)
                 TextField("Key page URL", text: $store.keyPageURL)
+                TextField("Help URL", text: $store.helpURL)
+                LabeledContent("Profile") {
+                    HStack {
+                        Button("Import…") { keyError = ProfileFile.importInto(store) }
+                        Button("Export…") { keyError = ProfileFile.exportFrom(store) }
+                    }
+                }
                 LabeledContent("Key page") {
                     Button("Get a key") {
                         keyError = store.openKeyPage()
@@ -189,7 +204,7 @@ private struct GatewaySettings: View {
                 }
 
             } footer: {
-                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never stored.")
+                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never stored. Replacing or deleting the key here does not revoke it at the gateway.")
                     .tallySecondary()
             }
         }

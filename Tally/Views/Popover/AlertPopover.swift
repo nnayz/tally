@@ -11,17 +11,13 @@ struct AlertPopover: View {
             PopoverTitle {
                 GearButton(action: openSettings)
             }
-            if let loadError = store.loadError {
-                Text(loadError)
-                    .font(.caption)
-                    .tallySecondary()
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if let loadNotice = store.loadNotice {
+            if let loadNotice = store.loadNotice, store.loadError == nil {
                 Text(loadNotice)
                     .font(.caption)
                     .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
             }
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
             BudgetBanner(store: store)
             todayCard
             monthCard

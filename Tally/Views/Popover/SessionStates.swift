@@ -143,15 +143,12 @@ struct EmptyUsageView: View {
                 .font(.subheadline)
                 .tallySecondary()
                 .multilineTextAlignment(.center)
-            if let loadError = store.loadError {
-                Text(loadError)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            } else if let loadNotice = store.loadNotice {
+            if let loadNotice = store.loadNotice, store.loadError == nil {
                 Text(loadNotice)
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
             Button("Refresh", action: store.refresh)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -161,7 +158,7 @@ struct EmptyUsageView: View {
                 .tallySecondary()
         }
         .padding(16)
-        .frame(width: 320, height: 360)
+        .frame(width: 320)
     }
 }
 
@@ -194,6 +191,7 @@ struct FailedUsageView: View {
             Text(store.loadError ?? "Couldn’t reach the gateway.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
+            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
             Button("Retry", action: store.reloadSpend)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -204,6 +202,35 @@ struct FailedUsageView: View {
             Spacer(minLength: 12)
         }
         .padding(16)
-        .frame(width: 320, height: 280)
+        .frame(width: 320)
+    }
+}
+
+struct CapabilityStatus: View {
+    var report: CapabilityReport
+    var alwaysCopy: Bool
+    var copy: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            statusLine("Spend and tokens", report.spend)
+            statusLine("Models", report.models)
+            statusLine("Request history", report.history)
+            statusLine("Last synchronization", report.synchronization)
+            if alwaysCopy || report.action != nil {
+                Button("Copy report", action: copy)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statusLine(_ title: String, _ value: String) -> some View {
+        Text("\(title) — \(value)")
+            .font(.caption)
+            .tallySecondary()
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

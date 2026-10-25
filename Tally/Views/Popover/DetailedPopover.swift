@@ -12,26 +12,24 @@ struct DetailedPopover: View {
             VStack(alignment: .leading, spacing: 6) {
                 PopoverTitle {
                     HStack(spacing: 6) {
-                        Circle()
-                            .fill(TallyPalette.statusGreen(scheme))
-                            .frame(width: 6, height: 6)
-                        Text("Live · \(Format.clock(store.lastUpdated))")
+                        if store.loadError == nil {
+                            Circle()
+                                .fill(TallyPalette.statusGreen(scheme))
+                                .frame(width: 6, height: 6)
+                        }
+                        Text(store.spendClock(stale: store.loadError != nil, livePrefix: "Live ·"))
                             .font(.caption)
                             .tallySecondary()
                         GearButton(action: openSettings)
                     }
                 }
-                if let loadError = store.loadError {
-                    Text(loadError)
-                        .font(.caption)
-                        .tallySecondary()
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if let loadNotice = store.loadNotice {
+                if let loadNotice = store.loadNotice, store.loadError == nil {
                     Text(loadNotice)
                         .font(.caption)
                         .tallySecondary()
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
@@ -206,7 +204,7 @@ private struct OverviewTab: View {
                 Text("\(store.money(driver.cost)) · ^[\(driver.requests) request](inflect: true) · \(driver.model.rawValue)")
                     .font(.caption)
                     .tallySecondary()
-                Button("View conversation ›") {
+                Button("View session ›") {
                     store.historyConversation = driver.name
                     store.historyRange = .today
                     store.historyView = .allRequests
@@ -425,9 +423,9 @@ private struct ConversationsTab: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .tallySecondary()
-                TextField("Conversations", text: $store.conversationQuery)
+                TextField("Sessions", text: $store.conversationQuery)
                     .textFieldStyle(.plain)
-                    .accessibilityLabel("Search conversations")
+                    .accessibilityLabel("Search sessions")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -441,7 +439,7 @@ private struct ConversationsTab: View {
                 SectionLabel(text: header)
                     .padding(.bottom, 8)
                 if rows.isEmpty {
-                    Text("No conversations match.")
+                    Text("No sessions match.")
                         .font(.subheadline)
                         .tallySecondary()
                         .padding(.vertical, 12)
@@ -493,7 +491,7 @@ private struct ConversationsTab: View {
                 BudgetBar(
                     fraction: maxCost > 0 ? row.cost / maxCost : 0,
                     height: 3,
-                    label: "percent of the largest conversation"
+                    label: "percent of the largest session"
                 )
                 .frame(width: 70)
             }

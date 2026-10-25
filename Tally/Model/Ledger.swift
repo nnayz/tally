@@ -211,7 +211,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "Overview"
         case .models: "Models"
-        case .conversations: "Convos"
+        case .conversations: "Sessions"
         case .requests: "Requests"
         }
     }
@@ -245,7 +245,7 @@ enum HistoryView: String, CaseIterable, Identifiable {
         switch self {
         case .allRequests: "All requests"
         case .byModel: "By model"
-        case .byConversation: "By conversation"
+        case .byConversation: "By session"
         case .errors: "Errors"
         }
     }

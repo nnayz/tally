@@ -114,9 +114,16 @@ private struct GatewaySettings: View {
                                 .font(.headline)
                             Text("API key stored in Keychain")
                                 .font(.subheadline)
-                            Text(store.loadError ?? store.loadNotice ?? "Updated \(Format.clock(store.lastUpdated))")
-                                .font(.caption)
-                                .tallySecondary()
+                            if let loadNotice = store.loadNotice, store.loadError == nil {
+                                Text(loadNotice)
+                                    .font(.caption)
+                                    .tallySecondary()
+                            }
+                            CapabilityStatus(
+                                report: store.capabilityReport,
+                                alwaysCopy: true,
+                                copy: store.copyCapabilityReport
+                            )
                         }
                         Spacer()
                         Button("Sign Out") { confirmSignOut = true }

@@ -44,10 +44,10 @@ struct SignInView: View {
                     .tallySecondary()
                 TextField("https://gateway.example.com", text: $store.gatewayURL)
                     .textFieldStyle(.roundedBorder)
-                Text("LiteLLM")
+                Text("Adapter")
                     .font(.caption)
                     .tallySecondary()
-                Picker("LiteLLM", selection: $store.gatewayVersion) {
+                Picker("Adapter", selection: $store.gatewayVersion) {
                     ForEach(GatewayVersion.allCases) { version in
                         Text(version.title).tag(version)
                     }

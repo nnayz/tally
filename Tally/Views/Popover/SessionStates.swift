@@ -8,6 +8,7 @@ struct SignInView: View {
     @FocusState private var apiKeyFocused: Bool
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 0) {
             HStack {
                 Text("Tally")
@@ -29,7 +30,7 @@ struct SignInView: View {
             Text("Connect your LLM Gateway")
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
-            Text("Sign in to the gateway management portal to load usage and cost data.")
+            Text("Open the key page, copy your virtual key, and paste it here.")
                 .font(.subheadline)
                 .tallySecondary()
                 .multilineTextAlignment(.center)
@@ -42,72 +43,71 @@ struct SignInView: View {
                     .tallySecondary()
                 TextField("https://gateway.example.com", text: $store.gatewayURL)
                     .textFieldStyle(.roundedBorder)
+                Text("LiteLLM")
+                    .font(.caption)
+                    .tallySecondary()
+                Picker("LiteLLM", selection: $store.gatewayVersion) {
+                    ForEach(GatewayVersion.allCases) { version in
+                        Text(version.title).tag(version)
+                    }
+                }
+                .labelsHidden()
+                Text("Spend URL")
+                    .font(.caption)
+                    .tallySecondary()
+                TextField("https://gateway.example.com/spend/logs/v2", text: store.spendURLBinding)
+                    .textFieldStyle(.roundedBorder)
+                Text("Key page URL")
+                    .font(.caption)
+                    .tallySecondary()
+                TextField("https://gateway.example.com/key", text: $store.keyPageURL)
+                    .textFieldStyle(.roundedBorder)
             }
             .padding(.top, 18)
 
-            if store.authMethod == .apiKey {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("API key")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("API key")
+                    .font(.caption)
+                    .tallySecondary()
+                SecureField("", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("API key")
+                    .focused($apiKeyFocused)
+                if let apiKeyError {
+                    Text(apiKeyError)
                         .font(.caption)
-                        .tallySecondary()
-                    SecureField("", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("API key")
-                        .focused($apiKeyFocused)
-                    if let apiKeyError {
-                        Text(apiKeyError)
-                            .font(.caption)
-                            .foregroundStyle(.primary)
-                    }
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.top, 8)
-                Button(store.isLoadingUsage ? "Checking…" : "Continue") {
-                    let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        apiKeyError = "Enter an API key to continue."
-                        apiKeyFocused = true
-                        return
-                    }
-                    apiKeyError = nil
-                    Task {
-                        if let error = await store.signIn(apiKey: trimmed) {
-                            apiKeyError = error
-                            apiKeyFocused = true
-                        }
-                    }
-                }
-                .disabled(store.isLoadingUsage)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-                Button("Use browser sign-in") {
-                    apiKeyError = nil
-                    store.authMethod = .browser
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-            } else {
-                Button("Sign in with Browser") {
-                    store.authMethod = .apiKey
-                    if let url = URL(string: store.gatewayURL), url.scheme == "https" {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 12)
-                Button("Use API key instead") {
-                    store.authMethod = .apiKey
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
             }
+            .padding(.top, 8)
+            Button(store.isLoadingUsage ? "Checking…" : "Continue") {
+                let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    apiKeyError = "Enter an API key to continue."
+                    apiKeyFocused = true
+                    return
+                }
+                apiKeyError = nil
+                Task {
+                    if let error = await store.signIn(apiKey: trimmed) {
+                        apiKeyError = error
+                        apiKeyFocused = true
+                    }
+                }
+            }
+            .disabled(store.isLoadingUsage)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            Button("Get a key") {
+                apiKeyError = store.openKeyPage()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
 
             Text("An API key is stored in the macOS Keychain.")
                 .font(.caption)
@@ -116,6 +116,8 @@ struct SignInView: View {
         }
         .padding(16)
         .frame(width: 320)
+        }
+        .frame(maxHeight: 560)
     }
 }
 
@@ -143,6 +145,10 @@ struct EmptyUsageView: View {
                 .multilineTextAlignment(.center)
             if let loadError = store.loadError {
                 Text(loadError)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            } else if let loadNotice = store.loadNotice {
+                Text(loadNotice)
                     .font(.caption)
                     .multilineTextAlignment(.center)
             }

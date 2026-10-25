@@ -16,6 +16,11 @@ struct AlertPopover: View {
                     .font(.caption)
                     .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
+            } else if let loadNotice = store.loadNotice {
+                Text(loadNotice)
+                    .font(.caption)
+                    .tallySecondary()
+                    .fixedSize(horizontal: false, vertical: true)
             }
             BudgetBanner(store: store)
             todayCard

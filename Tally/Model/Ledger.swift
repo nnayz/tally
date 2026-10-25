@@ -172,6 +172,7 @@ struct UsageRequest: Identifiable, Hashable {
     var output: Int
     var cost: Double
     var status: Int
+    var requestID: String = ""
 
     var isError: Bool { status != 200 }
 }

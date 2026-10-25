@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import ServiceManagement
 import SwiftUI
@@ -8,6 +9,7 @@ final class TallyStore {
     var ledger = Ledger(requests: [], now: Date(), dayStart: .utcMidnight)
     var isLoadingUsage = false
     var loadError: String?
+    var loadNotice: String?
     private var loadGeneration = 0
     private var seededLevels = false
 
@@ -96,12 +98,56 @@ final class TallyStore {
     var quotas: [WidgetSource: QuotaReading] = [:]
 
     var gatewayURL: String {
+        didSet {
+            persist()
+            guard ready else { return }
+            reloadSpend()
+        }
+    }
+    var gatewayVersion: GatewayVersion {
+        didSet {
+            let previous = GatewayClient.presetSpendURL(gatewayURL, version: oldValue)
+            if spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines) == previous {
+                spendURLCustom = ""
+            }
+            persist()
+            guard ready else { return }
+            reloadSpend()
+        }
+    }
+    var spendURLCustom: String {
+        didSet {
+            persist()
+            guard ready else { return }
+            reloadSpend()
+        }
+    }
+    var keyPageURL: String {
         didSet { persist() }
     }
     var authMethod: AuthMethod {
         didSet { persist() }
     }
     var apiKey: String
+
+    private var ready = false
+
+    var spendURL: String {
+        let custom = spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        return GatewayClient.presetSpendURL(gatewayURL, version: gatewayVersion)
+    }
+
+    var spendURLBinding: Binding<String> {
+        Binding(
+            get: { self.spendURL },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preset = GatewayClient.presetSpendURL(self.gatewayURL, version: self.gatewayVersion)
+                self.spendURLCustom = trimmed == preset ? "" : newValue
+            }
+        )
+    }
 
     var layout: PopoverLayout = .compact
     var detailTab: DetailTab = .overview
@@ -164,6 +210,9 @@ final class TallyStore {
             enabledSourceIDs = [WidgetSource.gateway.rawValue]
         }
         gatewayURL = defaults.string(forKey: Key.gateway) ?? "https://gateway.example.com"
+        gatewayVersion = GatewayVersion(rawValue: defaults.string(forKey: Key.version) ?? "") ?? .v1_106_2
+        spendURLCustom = defaults.string(forKey: Key.spendURL) ?? ""
+        keyPageURL = defaults.string(forKey: Key.keyPage) ?? ""
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
         let storedKey = KeychainStore.string(account: "apiKey")
         if storedKey == "tally-sample-3f9a" {
@@ -190,6 +239,7 @@ final class TallyStore {
         if !quotaSources.isEmpty {
             reloadQuotas()
         }
+        ready = true
         if isSignedIn {
             isLoadingUsage = true
             Task { await loadGateway() }
@@ -296,6 +346,18 @@ final class TallyStore {
         return value
     }
 
+    func openKeyPage() -> String? {
+        let page = keyPageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: page), url.scheme == "https", url.host?.isEmpty == false else {
+            return "Enter an https key page URL. A browser login does not connect Tally."
+        }
+        if GatewayClient.sameDestination(page, spendURL) {
+            return "The spend URL and the key page must be different."
+        }
+        NSWorkspace.shared.open(url)
+        return nil
+    }
+
     func signIn(apiKey enteredKey: String) async -> String? {
         let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter an API key to continue." }
@@ -321,6 +383,7 @@ final class TallyStore {
         layout = .compact
         apiKey = ""
         loadError = nil
+        loadNotice = nil
         isLoadingUsage = false
         loadGeneration += 1
         ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
@@ -607,14 +670,20 @@ final class TallyStore {
         loadGeneration += 1
         let generation = loadGeneration
         isLoadingUsage = true
-        let result = await GatewayClient.fetch(baseURL: gatewayURL, apiKey: apiKey)
+        let result = await GatewayClient.fetch(
+            spendURL: spendURL,
+            version: gatewayVersion,
+            apiKey: apiKey,
+            keyPageURL: keyPageURL
+        )
         guard generation == loadGeneration else { return nil }
         isLoadingUsage = false
         switch result {
-        case .success(let rows):
-            ledger = Ledger(requests: rows, now: Date(), dayStart: dayStart)
+        case .success(let read):
+            ledger = Ledger(requests: read.requests, now: Date(), dayStart: dayStart)
             lastUpdated = Date()
             loadError = nil
+            loadNotice = read.truncated ? GatewayClient.truncationNotice : nil
             if seededLevels {
                 considerNotifications()
             } else {
@@ -625,6 +694,7 @@ final class TallyStore {
             return nil
         case .failure(let error):
             loadError = error.message
+            loadNotice = nil
             return error.message
         }
     }
@@ -674,6 +744,9 @@ final class TallyStore {
         defaults.set(notifyAtWarning, forKey: Key.notifyWarning)
         defaults.set(snoozedUntil, forKey: Key.snooze)
         defaults.set(gatewayURL, forKey: Key.gateway)
+        defaults.set(gatewayVersion.rawValue, forKey: Key.version)
+        defaults.set(spendURLCustom, forKey: Key.spendURL)
+        defaults.set(keyPageURL, forKey: Key.keyPage)
         defaults.set(authMethod.rawValue, forKey: Key.auth)
         defaults.set(enabledSourceIDs, forKey: Key.sources)
         if let data = try? JSONEncoder().encode(modelCaps) {
@@ -697,6 +770,9 @@ final class TallyStore {
         static let snooze = "snoozedUntil"
         static let caps = "modelCaps"
         static let gateway = "gatewayURL"
+        static let version = "gatewayVersion"
+        static let spendURL = "spendURLCustom"
+        static let keyPage = "keyPageURL"
         static let auth = "authMethod"
         static let sources = "enabledSources"
     }

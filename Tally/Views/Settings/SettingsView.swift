@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct SettingsRoot: View {
@@ -115,7 +114,7 @@ private struct GatewaySettings: View {
                                 .font(.headline)
                             Text("API key stored in Keychain")
                                 .font(.subheadline)
-                            Text(store.loadError ?? "Updated \(Format.clock(store.lastUpdated))")
+                            Text(store.loadError ?? store.loadNotice ?? "Updated \(Format.clock(store.lastUpdated))")
                                 .font(.caption)
                                 .tallySecondary()
                         }
@@ -139,9 +138,16 @@ private struct GatewaySettings: View {
             }
             Section {
                 TextField("Gateway URL", text: $store.gatewayURL)
-                Picker("Authentication", selection: $store.authMethod) {
-                    ForEach(AuthMethod.allCases) { method in
-                        Text(method.title).tag(method)
+                Picker("LiteLLM", selection: $store.gatewayVersion) {
+                    ForEach(GatewayVersion.allCases) { version in
+                        Text(version.title).tag(version)
+                    }
+                }
+                TextField("Spend URL", text: store.spendURLBinding)
+                TextField("Key page URL", text: $store.keyPageURL)
+                LabeledContent("Key page") {
+                    Button("Get a key") {
+                        keyError = store.openKeyPage()
                     }
                 }
                 LabeledContent("API key") {
@@ -174,13 +180,7 @@ private struct GatewaySettings: View {
                     Text(keyError)
                         .foregroundStyle(.primary)
                 }
-                LabeledContent("Open management portal") {
-                    Button("Open ↗") {
-                        if let url = URL(string: store.gatewayURL) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
+
             } footer: {
                 Text("API keys are stored in the macOS Keychain. Prompts and outputs are never stored.")
                     .tallySecondary()

@@ -99,6 +99,7 @@ private struct GatewaySettings: View {
     @State private var replacingKey = false
     @State private var draftKey = ""
     @State private var keyError: String?
+    @State private var linkNotice: String?
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -167,6 +168,25 @@ private struct GatewaySettings: View {
                         Button("Export…") { keyError = ProfileFile.exportFrom(store) }
                     }
                 }
+                TextField("Hosted profile URL", text: $store.hostedProfileURL)
+                    .onChange(of: store.hostedProfileURL) { _, _ in
+                        linkNotice = nil
+                    }
+                LabeledContent("Setup link") {
+                    Button("Copy setup link") {
+                        if let error = store.copySetupLink() {
+                            keyError = error
+                            linkNotice = nil
+                        } else {
+                            keyError = nil
+                            linkNotice = "Copied the setup link."
+                        }
+                    }
+                }
+                if let linkNotice {
+                    Text(linkNotice)
+                        .foregroundStyle(.primary)
+                }
                 LabeledContent("Key page") {
                     Button("Get a key") {
                         keyError = store.openKeyPage()
@@ -203,8 +223,10 @@ private struct GatewaySettings: View {
                         .foregroundStyle(.primary)
                 }
 
+            } header: {
+                Text("Create connection profile")
             } footer: {
-                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never stored. Replacing or deleting the key here does not revoke it at the gateway.")
+                Text("Export the profile, host that file at an https address, paste the address, and copy the setup link. The link does not include a key. API keys are stored in the macOS Keychain. Prompts and outputs are never stored. Replacing or deleting the key here does not revoke it at the gateway.")
                     .tallySecondary()
             }
         }

@@ -88,6 +88,37 @@ enum GatewayClient {
             message: "The gateway redirected away from the approved host. The key was not sent there.",
             action: "Point the spend URL at the host that serves spend logs."
         )
+        static let profileRefused = Failure(
+            message: "The profile host refused the download. No API key was sent.",
+            action: "Publish the profile so it can be downloaded without a key."
+        )
+        static let profileMissing = Failure(
+            message: "The hosted profile was not found.",
+            action: "Confirm the profile address and that the file is published."
+        )
+        static let profileRedirected = Failure(
+            message: "The profile host redirected to another host. The file was not downloaded.",
+            action: "Host the profile at the address in the setup link."
+        )
+        static let profileUnreachable = Failure(
+            message: "Couldn’t reach the profile host.",
+            action: "Confirm the hosted profile address is reachable."
+        )
+        static let profilePrivate = Failure(
+            message: "This profile address is a private or metadata host. It was not downloaded.",
+            action: "Host the profile at a public https address."
+        )
+        static let profileTooLarge = Failure(
+            message: "The hosted profile is larger than 64 KB.",
+            action: "Export the profile from Tally and host that file."
+        )
+
+        static func profileHTTP(_ status: Int) -> Failure {
+            Failure(
+                message: "The profile host returned HTTP \(status).",
+                action: "Confirm the hosted profile address."
+            )
+        }
     }
 
     struct Read {
@@ -440,6 +471,56 @@ enum GatewayClient {
             assertionFailure("private profile")
             return
         }
+
+        let setupSecret = "sk-setup-secret"
+        let hosted = "https://files.example.com/tally.json"
+        guard case .success(let link) = SetupLink.make(hostedURL: hosted) else {
+            assertionFailure("setup link")
+            return
+        }
+        assert(link.hasPrefix("tally://connect?"))
+        assert(!link.contains(setupSecret))
+        guard let parsedLink = URL(string: link),
+              let roundTrip = SetupLink.profileURL(from: parsedLink) else {
+            assertionFailure("parse setup link")
+            return
+        }
+        assert(roundTrip.absoluteString == hosted)
+        assert(SetupLink.profileURL(from: URL(string: "tally://connect")!) == nil)
+        let dirty = URL(string: "tally://connect?url=\(hosted)&apiKey=\(setupSecret)")!
+        let extracted = SetupLink.profileURL(from: dirty)
+        assert(extracted?.absoluteString == hosted)
+        assert(extracted?.absoluteString.contains(setupSecret) != true)
+        guard case .failure = SetupLink.make(hostedURL: "http://files.example.com/tally.json") else {
+            assertionFailure("http setup link")
+            return
+        }
+        guard case .failure = SetupLink.make(hostedURL: "https://127.0.0.1/profile.json") else {
+            assertionFailure("loopback setup link")
+            return
+        }
+        guard case .failure = SetupLink.make(hostedURL: "https://user:\(setupSecret)@files.example.com/tally.json") else {
+            assertionFailure("setup link userinfo")
+            return
+        }
+        assert(emptyReport.text.contains("Profile host: This Mac"))
+        assert(emptyReport.text.contains("Declared scope: This key"))
+        let hostedReport = CapabilityReport.make(
+            host: "gateway.example.com",
+            profileHost: "files.example.com",
+            declaredScope: "This key",
+            failure: .profileMissing,
+            empty: false,
+            checking: false,
+            synced: nil,
+            now: now
+        )
+        assert(hostedReport.text.contains("Profile host: files.example.com"))
+        assert(hostedReport.text.contains("Declared scope: This key"))
+        assert(hostedReport.text.contains("Scope: this key only"))
+        assert(hostedReport.text.contains(Failure.profileMissing.message))
+        assert(hostedReport.text.contains("Operator: \(Failure.profileMissing.action)"))
+        assert(!hostedReport.text.contains(setupSecret))
     }
     #endif
 
@@ -690,12 +771,72 @@ enum GatewayClient {
         case unreachable
     }
 
+    /// Downloads a hosted profile. Sends no Authorization header.
+    static func downloadProfile(from raw: String) async -> Result<ConnectionProfile, Failure> {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              components.scheme == "https",
+              let host = components.host,
+              !host.isEmpty,
+              components.user == nil,
+              components.password == nil,
+              let url = components.url else {
+            return .failure(Failure(
+                message: "Enter an https address for the hosted profile.",
+                action: "Host the exported JSON at an https address."
+            ))
+        }
+        if HostGuard.isBlockedName(host) || (HostGuard.isNumeric(host) && HostGuard.isBlockedAddress(host)) {
+            return .failure(.profilePrivate)
+        }
+        switch HostGuard.classify(host) {
+        case .allowed:
+            break
+        case .blocked:
+            return .failure(.profilePrivate)
+        case .unresolved:
+            return .failure(Failure(
+                message: "Couldn’t resolve the profile host. It was not downloaded.",
+                action: "Check the profile address and try again."
+            ))
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        switch await send(request, approvedHostKey: hostKey(of: url.absoluteString), keyPageURL: "") {
+        case .data(let data):
+            // shortcut: the body is read fully, then rejected over 64 KB — stream the cap if profiles grow
+            if data.count > 65_536 { return .failure(.profileTooLarge) }
+            switch ConnectionProfile.decode(data) {
+            case .failure(let failure):
+                return .failure(failure)
+            case .success(let profile):
+                if let failure = screen(spendURL: profile.spendURL, keyPageURL: profile.keyPageURL, helpURL: profile.helpURL) {
+                    return .failure(failure)
+                }
+                return .success(profile)
+            }
+        case .status(let code):
+            switch code {
+            case 401, 403: return .failure(.profileRefused)
+            case 404: return .failure(.profileMissing)
+            default: return .failure(.profileHTTP(code))
+            }
+        case .redirect:
+            return .failure(.profileRedirected)
+        case .unreachable:
+            return .failure(.profileUnreachable)
+        }
+    }
+
     private static func send(_ request: URLRequest, approvedHostKey: String, keyPageURL: String) async -> Fetch {
         let pin = RedirectPin(approvedHostKey: approvedHostKey, keyPageURL: keyPageURL)
         let session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse else { return .unreachable }
+              let http = response as? HTTPURLResponse else {
+            return pin.rejected ? .redirect : .unreachable
+        }
         if pin.rejected || (300..<400).contains(http.statusCode) { return .redirect }
         guard (200..<300).contains(http.statusCode) else { return .status(http.statusCode) }
         return .data(data)
@@ -740,6 +881,8 @@ private final class RedirectPin: NSObject, URLSessionTaskDelegate, @unchecked Se
 
 struct CapabilityReport: Equatable {
     var host: String
+    var profileHost: String
+    var declaredScope: String
     var spend: String
     var models: String
     var history: String
@@ -749,6 +892,8 @@ struct CapabilityReport: Equatable {
     var text: String {
         var lines = [
             "Host: \(host)",
+            "Profile host: \(profileHost)",
+            "Declared scope: \(declaredScope)",
             "Scope: this key only",
             "Spend and tokens: \(spend)",
             "Models: \(models)",
@@ -763,6 +908,8 @@ struct CapabilityReport: Equatable {
 
     static func make(
         host: String,
+        profileHost: String = "This Mac",
+        declaredScope: String = "This key",
         failure: GatewayClient.Failure?,
         empty: Bool,
         checking: Bool,
@@ -791,6 +938,8 @@ struct CapabilityReport: Equatable {
         }
         return CapabilityReport(
             host: host,
+            profileHost: profileHost,
+            declaredScope: declaredScope,
             spend: sentence,
             models: waiting ? sentence : "Available",
             history: waiting ? sentence : "Available",
@@ -1058,5 +1207,56 @@ struct ConnectionProfile: Codable, Equatable {
             return list.contains(where: containsSecret)
         }
         return false
+    }
+}
+
+enum SetupLink {
+    /// Structural only. DNS happens when the profile is downloaded.
+    static func make(hostedURL: String) -> Result<String, GatewayClient.Failure> {
+        guard let components = httpsComponents(hostedURL) else {
+            return .failure(GatewayClient.Failure(
+                message: "Enter an https address for the hosted profile.",
+                action: "Host the exported JSON at an https address."
+            ))
+        }
+        if components.user != nil || components.password != nil {
+            return .failure(GatewayClient.Failure(
+                message: "The profile address must not include a username or password.",
+                action: "Remove the username and password from the address."
+            ))
+        }
+        if let host = components.host, HostGuard.isBlockedName(host) || (HostGuard.isNumeric(host) && HostGuard.isBlockedAddress(host)) {
+            return .failure(.profilePrivate)
+        }
+        var link = URLComponents()
+        link.scheme = "tally"
+        link.host = "connect"
+        link.queryItems = [URLQueryItem(name: "url", value: components.string ?? hostedURL)]
+        guard let string = link.string else {
+            return .failure(GatewayClient.Failure(
+                message: "Couldn’t copy the setup link.",
+                action: "Check the hosted profile address and try again."
+            ))
+        }
+        return .success(string)
+    }
+
+    /// The `url` query item only. Other query items, including a key, are ignored.
+    static func profileURL(from link: URL) -> URL? {
+        guard link.scheme?.lowercased() == "tally", link.host?.lowercased() == "connect" else { return nil }
+        guard let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems,
+              let raw = items.first(where: { $0.name == "url" })?.value,
+              let components = httpsComponents(raw),
+              components.user == nil,
+              components.password == nil else { return nil }
+        return components.url
+    }
+
+    private static func httpsComponents(_ raw: String) -> URLComponents? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              components.scheme == "https",
+              components.host?.isEmpty == false else { return nil }
+        return components
     }
 }

@@ -390,6 +390,7 @@ enum SettingsTab: String {
 
 enum TallyWindow {
     static let history = "history"
+    static let connect = "connect"
 }
 
 struct Ledger {

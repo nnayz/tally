@@ -28,5 +28,16 @@
 	<true/>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Tally notifies you when spend reaches a budget you set.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.nnayz.tally.connect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tally</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -15,6 +15,9 @@ targets:
     platform: macOS
     sources:
       - path: Tally
+        excludes:
+          - ".agents/**"
+          - "skills-lock.json"
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.nnayz.tally
       PRODUCT_NAME: Tally
@@ -35,6 +38,10 @@ targets:
         LSMinimumSystemVersion: "15.0"
         NSUserNotificationsUsageDescription: Tally notifies you when spend reaches a budget you set.
         NSHighResolutionCapable: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.nnayz.tally.connect
+            CFBundleURLSchemes:
+              - tally
 schemes:
   Tally:
     build:

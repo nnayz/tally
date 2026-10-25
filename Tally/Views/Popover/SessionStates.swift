@@ -163,7 +163,8 @@ struct SignInView: View {
         .padding(16)
         .frame(width: 320)
         }
-        .frame(maxHeight: 560)
+        .frame(width: 320, height: 560)
+        .fixedSize()
     }
 }
 

@@ -12,6 +12,10 @@ struct PopoverRoot: View {
                 switch store.phase {
                 case .signedOut:
                     SignInView(store: store)
+                case .loading:
+                    LoadingUsageView()
+                case .failed:
+                    FailedUsageView(store: store)
                 case .empty:
                     EmptyUsageView(store: store)
                 case .live:

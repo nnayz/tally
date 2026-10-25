@@ -11,6 +11,12 @@ struct AlertPopover: View {
             PopoverTitle {
                 GearButton(action: openSettings)
             }
+            if let loadError = store.loadError {
+                Text(loadError)
+                    .font(.caption)
+                    .tallySecondary()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             BudgetBanner(store: store)
             todayCard
             monthCard

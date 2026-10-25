@@ -99,7 +99,7 @@ private struct GatewaySettings: View {
     @Environment(\.colorScheme) private var scheme
     @State private var replacingKey = false
     @State private var draftKey = ""
-    @State private var keySaveFailed = false
+    @State private var keyError: String?
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -113,9 +113,9 @@ private struct GatewaySettings: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Connected")
                                 .font(.headline)
-                            Text(store.apiKey.count >= 4 ? "API key stored in Keychain" : "Signed in with the browser")
+                            Text("API key stored in Keychain")
                                 .font(.subheadline)
-                            Text("Updated \(Format.clock(store.lastUpdated))")
+                            Text(store.loadError ?? "Updated \(Format.clock(store.lastUpdated))")
                                 .font(.caption)
                                 .tallySecondary()
                         }
@@ -148,16 +148,18 @@ private struct GatewaySettings: View {
                     if replacingKey {
                         HStack {
                             SecureField("New API key", text: $draftKey)
-                            Button("Save") {
-                                if store.replaceAPIKey(draftKey) {
-                                    draftKey = ""
-                                    replacingKey = false
-                                    keySaveFailed = false
-                                } else {
-                                    keySaveFailed = true
+                            Button(store.isLoadingUsage ? "Checking…" : "Save") {
+                                Task {
+                                    if let error = await store.replaceAPIKey(draftKey) {
+                                        keyError = error
+                                    } else {
+                                        draftKey = ""
+                                        replacingKey = false
+                                        keyError = nil
+                                    }
                                 }
                             }
-                            .disabled(draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .disabled(store.isLoadingUsage || draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                     } else {
                         HStack {
@@ -168,8 +170,8 @@ private struct GatewaySettings: View {
                         }
                     }
                 }
-                if keySaveFailed {
-                    Text("Couldn’t save the API key to the Keychain.")
+                if let keyError {
+                    Text(keyError)
                         .foregroundStyle(.primary)
                 }
                 LabeledContent("Open management portal") {
@@ -180,7 +182,7 @@ private struct GatewaySettings: View {
                     }
                 }
             } footer: {
-                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never downloaded — metadata only.")
+                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never stored.")
                     .tallySecondary()
             }
         }
@@ -245,10 +247,14 @@ private struct ModelCapsSheet: View {
             Text("Optional monthly caps. Tally only warns — it does not block traffic.")
                 .font(.callout)
                 .tallySecondary()
-            ForEach(AIModel.allCases) { model in
+            if store.knownModels.isEmpty {
+                Text("Limits can be set after usage loads.")
+                    .tallySecondary()
+            }
+            ForEach(store.knownModels) { model in
                 HStack {
                     ModelDot(color: model.color)
-                    Text(model.rawValue)
+                    Text(model.id)
                     Spacer()
                     TextField("No cap", text: draftBinding(model))
                         .frame(width: 120)

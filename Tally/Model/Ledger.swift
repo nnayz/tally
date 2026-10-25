@@ -1,41 +1,49 @@
 import Foundation
 import SwiftUI
 
-enum AIModel: String, CaseIterable, Identifiable, Hashable {
-    case claudeSonnet = "claude-sonnet"
-    case gpt4o = "gpt-4o"
-    case geminiPro = "gemini-pro"
-    case gpt4oMini = "gpt-4o-mini"
-    case claudeHaiku = "claude-haiku"
+struct AIModel: Identifiable, Hashable {
+    var id: String
 
-    var id: String { rawValue }
-
-    var vendor: String {
-        switch self {
-        case .claudeSonnet, .claudeHaiku: "Anthropic"
-        case .gpt4o, .gpt4oMini: "OpenAI"
-        case .geminiPro: "Google"
-        }
+    init(_ id: String) {
+        self.id = id.isEmpty ? "unknown" : id
     }
 
-    var qualifiedName: String {
-        switch self {
-        case .claudeSonnet: "anthropic/claude-sonnet"
-        case .gpt4o: "openai/gpt-4o"
-        case .geminiPro: "google/gemini-pro"
-        case .gpt4oMini: "openai/gpt-4o-mini"
-        case .claudeHaiku: "anthropic/claude-haiku"
+    var rawValue: String { id }
+    var qualifiedName: String { id }
+
+    var vendor: String {
+        let name = id.lowercased()
+        if name.contains("claude") || name.contains("anthropic") { return "Anthropic" }
+        if name.contains("gpt") || name.contains("openai") { return "OpenAI" }
+        if name.contains("gemini") || name.contains("google") { return "Google" }
+        if let slash = id.firstIndex(of: "/"), slash != id.startIndex {
+            return String(id[..<slash])
         }
+        return "Other"
     }
 
     var color: Color {
-        switch self {
-        case .claudeSonnet: Color(red: 0.36, green: 0.42, blue: 0.96)
-        case .gpt4o: Color(red: 0.000, green: 0.553, blue: 0.516)
-        case .geminiPro: Color(red: 0.650, green: 0.457, blue: 0.000)
-        case .gpt4oMini: Color(red: 0.000, green: 0.541, blue: 0.628)
-        case .claudeHaiku: Color(red: 0.62, green: 0.36, blue: 0.95)
+        let name = id.lowercased()
+        if name.contains("haiku") { return Color(red: 0.62, green: 0.36, blue: 0.95) }
+        if name.contains("claude") || name.contains("anthropic") { return Color(red: 0.36, green: 0.42, blue: 0.96) }
+        if name.contains("mini") && (name.contains("gpt") || name.contains("openai")) {
+            return Color(red: 0.000, green: 0.541, blue: 0.628)
         }
+        if name.contains("gpt") || name.contains("openai") { return Color(red: 0.000, green: 0.553, blue: 0.516) }
+        if name.contains("gemini") || name.contains("google") { return Color(red: 0.650, green: 0.457, blue: 0.000) }
+        let palette = [
+            Color(red: 0.36, green: 0.42, blue: 0.96),
+            Color(red: 0.000, green: 0.553, blue: 0.516),
+            Color(red: 0.650, green: 0.457, blue: 0.000),
+            Color(red: 0.000, green: 0.541, blue: 0.628),
+            Color(red: 0.62, green: 0.36, blue: 0.95),
+        ]
+        var hash = 0
+        for byte in id.utf8 {
+            hash = hash &* 31 &+ Int(byte)
+        }
+        let count = palette.count
+        return palette[(hash % count + count) % count]
     }
 }
 
@@ -112,11 +120,9 @@ enum UsageRollup {
     }
 
     static func models(in rows: [UsageRequest]) -> [ModelRow] {
-        AIModel.allCases.compactMap { model in
-            let matching = rows.filter { $0.model == model }
-            guard !matching.isEmpty else { return nil }
-            return ModelRow(
-                model: model,
+        Dictionary(grouping: rows, by: \.model.id).map { _, matching in
+            ModelRow(
+                model: matching[0].model,
                 requests: matching.count,
                 input: matching.reduce(0) { $0 + $1.input },
                 output: matching.reduce(0) { $0 + $1.output },
@@ -402,132 +408,74 @@ struct Ledger {
     let requests: [UsageRequest]
     let highlightedRequestID: Int
 
-    static let shared = Ledger()
+    init(requests: [UsageRequest], now: Date, dayStart: DayStart) {
+        snapshot = now
+        let sorted = requests.sorted { $0.time > $1.time }.enumerated().map { index, request in
+            var copy = request
+            copy.id = index + 1
+            return copy
+        }
+        self.requests = sorted
+        highlightedRequestID = sorted.first?.id ?? 0
 
-    static let conversations = [
-        "CSR section 11 drafting",
-        "Protocol synopsis review",
-        "SLR abstract screening",
-        "PSUR literature summary",
-        "Label comparison EU/US",
-        "Translation DE→EN",
-        "Untagged",
-    ]
+        let todayStart = dayStart.boundary(containing: now)
+        let todayEnd = dayStart.addingDays(1, to: todayStart)
+        let todayRows = sorted.filter { $0.time >= todayStart && $0.time < todayEnd }
+        let calendar = Calendar.current
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? todayStart
+        let monthRows = sorted.filter { $0.time >= monthStart && $0.time <= now }
 
-    private init() {
-        let snapshot = Ledger.date(24, 17, 44, 2)
-        self.snapshot = snapshot
-        todaySpend = 18.42
-        monthSpend = 412.80
-        projectedMonthEnd = 552
-        projectionDate = Ledger.date(31, 0, 0, 0)
-        todayRequestCount = 1_284
-        todayTokensIn = 3_900_000
-        todayTokensOut = 612_000
-        topDriver = CostDriver(
-            name: "CSR section 11 drafting",
-            cost: 4.86,
-            requests: 37,
-            model: .claudeSonnet
-        )
-        monthModels = [
-            ModelTotal(model: .claudeSonnet, requests: 1820, cost: 168.20),
-            ModelTotal(model: .gpt4o, requests: 2410, cost: 121.50),
-            ModelTotal(model: .geminiPro, requests: 960, cost: 64.30),
-            ModelTotal(model: .gpt4oMini, requests: 5120, cost: 38.90),
-            ModelTotal(model: .claudeHaiku, requests: 2200, cost: 19.90),
-        ]
-        todayModels = [
-            ModelTotal(model: .claudeSonnet, requests: 566, cost: 8.12),
-            ModelTotal(model: .gpt4o, requests: 372, cost: 5.34),
-            ModelTotal(model: .geminiPro, requests: 216, cost: 3.10),
-            ModelTotal(model: .gpt4oMini, requests: 84, cost: 1.20),
-            ModelTotal(model: .claudeHaiku, requests: 46, cost: 0.66),
-        ]
-        monthConversations = [
-            ConversationTotal(name: "CSR section 11 drafting", requests: 212, modelLabel: "claude-sonnet", cost: 38.40),
-            ConversationTotal(name: "Protocol synopsis review", requests: 148, modelLabel: "gpt-4o", cost: 27.15),
-            ConversationTotal(name: "SLR abstract screening", requests: 1040, modelLabel: "gpt-4o-mini", cost: 22.90),
-            ConversationTotal(name: "PSUR literature summary", requests: 96, modelLabel: "claude-sonnet", cost: 18.62),
-            ConversationTotal(name: "Label comparison EU/US", requests: 74, modelLabel: "gemini-pro", cost: 11.08),
-            ConversationTotal(name: "Translation DE→EN", requests: 51, modelLabel: "gpt-4o", cost: 6.44),
-            ConversationTotal(name: "Untagged requests", requests: 88, modelLabel: "mixed", cost: 4.20),
-        ]
-        dailySpend = [12, 15, 9, 22, 18, 14, 11, 19, 24, 16, 13, 21, 17, 18.42].enumerated().map { offset, amount in
-            DailySpend(date: Ledger.date(11 + offset, 12, 0, 0), amount: amount)
+        todaySpend = todayRows.reduce(0) { $0 + $1.cost }
+        monthSpend = monthRows.reduce(0) { $0 + $1.cost }
+        todayRequestCount = todayRows.count
+        todayTokensIn = todayRows.reduce(0) { $0 + $1.input }
+        todayTokensOut = todayRows.reduce(0) { $0 + $1.output }
+        todayModels = UsageRollup.models(in: todayRows).map {
+            ModelTotal(model: $0.model, requests: $0.requests, cost: $0.cost)
+        }
+        monthModels = UsageRollup.models(in: monthRows).map {
+            ModelTotal(model: $0.model, requests: $0.requests, cost: $0.cost)
+        }
+        monthConversations = UsageRollup.conversations(in: monthRows).map {
+            ConversationTotal(name: $0.name, requests: $0.requests, modelLabel: $0.modelLabel, cost: $0.cost)
         }
 
-        let built = Ledger.pinnedRequests()
-        requests = built.requests
-        highlightedRequestID = built.highlight
-    }
-
-    static func date(_ day: Int, _ hour: Int, _ minute: Int, _ second: Int) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .current
-        let parts = DateComponents(year: 2026, month: 10, day: day, hour: hour, minute: minute, second: second)
-        return calendar.date(from: parts) ?? Date()
-    }
-
-    private static func pinnedRequests() -> (requests: [UsageRequest], highlight: Int) {
-        let drafts = pinnedRows().sorted { $0.time > $1.time }
-        let requests = drafts.enumerated().map { index, draft in
-            UsageRequest(
-                id: index + 1,
-                time: draft.time,
-                model: draft.model,
-                conversation: draft.conversation,
-                input: draft.input,
-                output: draft.output,
-                cost: Double(draft.costMilli) / 10_000,
-                status: draft.status
-            )
+        var days: [DailySpend] = []
+        var cursor = calendar.startOfDay(for: monthStart)
+        let lastDay = calendar.startOfDay(for: now)
+        while cursor <= lastDay {
+            let next = calendar.date(byAdding: .day, value: 1, to: cursor) ?? cursor
+            let amount = monthRows.filter { $0.time >= cursor && $0.time < next }.reduce(0) { $0 + $1.cost }
+            days.append(DailySpend(date: cursor, amount: amount))
+            cursor = next
         }
-        let highlight = requests.first { $0.time == date(24, 17, 42, 40) }?.id ?? requests.first?.id ?? 1
-        return (requests, highlight)
-    }
+        dailySpend = days
 
-    private struct Draft {
-        var time: Date
-        var model: AIModel
-        var conversation: String
-        var input: Int
-        var output: Int
-        var costMilli: Int
-        var status: Int
-    }
-
-    private static func pinnedRows() -> [Draft] {
-        func row(
-            _ hour: Int, _ minute: Int, _ second: Int,
-            _ model: AIModel, _ conversation: String,
-            _ input: Int, _ output: Int, _ costMilli: Int, _ status: Int = 200
-        ) -> Draft {
-            Draft(
-                time: date(24, hour, minute, second),
-                model: model,
-                conversation: conversation,
-                input: input,
-                output: output,
-                costMilli: costMilli,
-                status: status
-            )
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? now
+        let hoursLeft = max(nextMonth.timeIntervalSince(now) / 3600, 0)
+        let elapsed = now.timeIntervalSince(todayStart)
+        if todaySpend > 0, elapsed > 60 {
+            projectedMonthEnd = monthSpend + todaySpend / (elapsed / 3600) * hoursLeft
+        } else {
+            projectedMonthEnd = monthSpend
         }
-        return [
-            row(17, 44, 2, .claudeSonnet, "CSR section 11 drafting", 2412, 830, 197),
-            row(17, 43, 51, .gpt4oMini, "SLR abstract screening", 1180, 96, 2),
-            row(17, 43, 12, .gpt4o, "Protocol synopsis review", 3510, 1204, 208),
-            row(17, 42, 40, .claudeSonnet, "CSR section 11 drafting", 8020, 1650, 488),
-            row(17, 41, 5, .geminiPro, "Label comparison EU/US", 4100, 512, 77),
-            row(17, 40, 33, .gpt4o, "—", 0, 0, 0, 429),
-            row(17, 39, 58, .claudeHaiku, "Translation DE→EN", 900, 710, 11),
-            row(17, 38, 20, .gpt4o, "Protocol synopsis review", 5880, 2010, 348),
-            row(17, 36, 47, .claudeSonnet, "PSUR literature summary", 12400, 1980, 669),
-            row(17, 35, 10, .gpt4oMini, "SLR abstract screening", 1204, 88, 2),
-            row(17, 33, 2, .claudeSonnet, "CSR section 11 drafting", 6750, 1420, 416),
-            row(17, 31, 44, .geminiPro, "Label comparison EU/US", 3300, 640, 73),
-            row(17, 30, 15, .gpt4o, "Translation DE→EN", 1020, 880, 114),
-            row(17, 28, 59, .claudeSonnet, "Untagged", 2200, 400, 126),
-        ]
+        let dayCount = calendar.range(of: .day, in: .month, for: now)?.count ?? 1
+        var parts = calendar.dateComponents([.year, .month], from: now)
+        parts.day = dayCount
+        projectionDate = calendar.date(from: parts) ?? now
+
+        let named = Dictionary(grouping: todayRows.filter { $0.conversation != "—" }, by: \.conversation)
+        if let best = named.max(by: { Ledger.cost($0.value) < Ledger.cost($1.value) }) {
+            let model = best.value.max { $0.cost < $1.cost }?.model ?? AIModel("unknown")
+            topDriver = CostDriver(name: best.key, cost: Ledger.cost(best.value), requests: best.value.count, model: model)
+        } else if let modelRow = todayModels.first {
+            topDriver = CostDriver(name: modelRow.model.id, cost: modelRow.cost, requests: modelRow.requests, model: modelRow.model)
+        } else {
+            topDriver = CostDriver(name: "—", cost: 0, requests: 0, model: AIModel("unknown"))
+        }
+    }
+
+    private static func cost(_ rows: [UsageRequest]) -> Double {
+        rows.reduce(0) { $0 + $1.cost }
     }
 }

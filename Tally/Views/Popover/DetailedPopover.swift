@@ -9,15 +9,23 @@ struct DetailedPopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PopoverTitle {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(TallyPalette.statusGreen(scheme))
-                        .frame(width: 6, height: 6)
-                    Text("Live · \(Format.clock(store.lastUpdated))")
+            VStack(alignment: .leading, spacing: 6) {
+                PopoverTitle {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(TallyPalette.statusGreen(scheme))
+                            .frame(width: 6, height: 6)
+                        Text("Live · \(Format.clock(store.lastUpdated))")
+                            .font(.caption)
+                            .tallySecondary()
+                        GearButton(action: openSettings)
+                    }
+                }
+                if let loadError = store.loadError {
+                    Text(loadError)
                         .font(.caption)
                         .tallySecondary()
-                    GearButton(action: openSettings)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 16)

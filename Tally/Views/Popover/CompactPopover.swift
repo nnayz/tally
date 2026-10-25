@@ -13,7 +13,7 @@ struct CompactPopover: View {
                     Text("Updated \(Format.clock(store.lastUpdated))")
                         .font(.caption)
                         .tallySecondary()
-                    Button(action: store.reloadQuotas) {
+                    Button(action: store.refresh) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11, weight: .medium))
                             .frame(width: 22, height: 22)
@@ -22,6 +22,12 @@ struct CompactPopover: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Refresh")
                 }
+            }
+            if let loadError = store.loadError {
+                Text(loadError)
+                    .font(.caption)
+                    .tallySecondary()
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if store.gatewayEnabled {
@@ -59,7 +65,7 @@ struct CompactPopover: View {
                 Button("Open Dashboard", action: openHistory)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                Button("Refresh", action: store.reloadQuotas)
+                Button("Refresh", action: store.refresh)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 Spacer(minLength: 0)

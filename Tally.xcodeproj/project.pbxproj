@@ -13,6 +13,7 @@
 		35BBEA0B07AD308B03814152 /* TallyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 952D829F4BE8048607324226 /* TallyApp.swift */; };
 		446D72DB8B5D450844D65ABF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0E91360750E6493DD7621468 /* Assets.xcassets */; };
 		4F5F3CA20C294B6C24EF98D7 /* TallyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109A68D54D2AA3C65E076A14 /* TallyStore.swift */; };
+		B2C3D4E5F60718293A4B5C6D /* GatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* GatewayClient.swift */; };
 		61F57C58B0D2C898B0427CF0 /* AlertPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF56FB0346C0088B9FC20855 /* AlertPopover.swift */; };
 		75D17C752BCFE84D47CAD741 /* BudgetNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F2018568A65EAF767AA16C /* BudgetNotifications.swift */; };
 		9D1EC2EF1EDD3C2E23B7090D /* DetailedPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 512BC38CAB289AB92B51B672 /* DetailedPopover.swift */; };
@@ -30,6 +31,7 @@
 		0438430608549D75B2F651AE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0E91360750E6493DD7621468 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		109A68D54D2AA3C65E076A14 /* TallyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TallyStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C /* GatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayClient.swift; sourceTree = "<group>"; };
 		1D524BE158366BD822F57754 /* WidgetSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSources.swift; sourceTree = "<group>"; };
 		273CEE41783C18436470CEC5 /* SessionStates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStates.swift; sourceTree = "<group>"; };
 		285C8B6F89C35811CF2B16B9 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
@@ -62,6 +64,7 @@
 		4D24E67BC9DFBA903005CB19 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60718293A4B5C /* GatewayClient.swift */,
 				DCEA15068E14AAD9E95A3B87 /* Ledger.swift */,
 				109A68D54D2AA3C65E076A14 /* TallyStore.swift */,
 				1D524BE158366BD822F57754 /* WidgetSources.swift */,
@@ -213,6 +216,7 @@
 				F7E7AFDA206071E504D22E00 /* CompactPopover.swift in Sources */,
 				D5F62C226C94A090A4A37A5E /* Components.swift in Sources */,
 				9D1EC2EF1EDD3C2E23B7090D /* DetailedPopover.swift in Sources */,
+				B2C3D4E5F60718293A4B5C6D /* GatewayClient.swift in Sources */,
 				CB151F5C427E1996C7DD1B7F /* Format.swift in Sources */,
 				129A019D95D48013782AB375 /* KeychainStore.swift in Sources */,
 				1C7BE0B491D91444AA140412 /* Ledger.swift in Sources */,

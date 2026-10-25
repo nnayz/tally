@@ -65,13 +65,13 @@ struct UsageHistoryView: View {
                 }
                 filterMenu("Model", selection: $store.historyModel) {
                     Text("All models").tag("All models")
-                    ForEach(AIModel.allCases) { model in
-                        Text(model.rawValue).tag(model.rawValue)
+                    ForEach(store.knownModels) { model in
+                        Text(model.id).tag(model.id)
                     }
                 }
                 filterMenu("Conversation", selection: $store.historyConversation) {
                     Text("All").tag("All")
-                    ForEach(Ledger.conversations, id: \.self) { name in
+                    ForEach(store.knownConversations, id: \.self) { name in
                         Text(name).tag(name)
                     }
                 }

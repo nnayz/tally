@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SignInView: View {
@@ -60,18 +61,22 @@ struct SignInView: View {
                     }
                 }
                 .padding(.top, 8)
-                Button("Continue") {
+                Button(store.isLoadingUsage ? "Checking…" : "Continue") {
                     let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
                     if trimmed.isEmpty {
                         apiKeyError = "Enter an API key to continue."
                         apiKeyFocused = true
-                    } else if store.signIn(apiKey: trimmed) {
-                        apiKeyError = nil
-                    } else {
-                        apiKeyError = "Couldn’t save the API key to the Keychain."
-                        apiKeyFocused = true
+                        return
+                    }
+                    apiKeyError = nil
+                    Task {
+                        if let error = await store.signIn(apiKey: trimmed) {
+                            apiKeyError = error
+                            apiKeyFocused = true
+                        }
                     }
                 }
+                .disabled(store.isLoadingUsage)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
@@ -86,7 +91,10 @@ struct SignInView: View {
                 .padding(.top, 8)
             } else {
                 Button("Sign in with Browser") {
-                    store.signIn(apiKey: nil)
+                    store.authMethod = .apiKey
+                    if let url = URL(string: store.gatewayURL), url.scheme == "https" {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -133,7 +141,12 @@ struct EmptyUsageView: View {
                 .font(.subheadline)
                 .tallySecondary()
                 .multilineTextAlignment(.center)
-            Button("Refresh", action: store.reloadQuotas)
+            if let loadError = store.loadError {
+                Text(loadError)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            }
+            Button("Refresh", action: store.refresh)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             Spacer(minLength: 12)
@@ -143,5 +156,48 @@ struct EmptyUsageView: View {
         }
         .padding(16)
         .frame(width: 320, height: 360)
+    }
+}
+
+struct LoadingUsageView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Tally")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 12)
+            ProgressView()
+            Text("Loading usage…")
+                .font(.headline)
+            Spacer(minLength: 12)
+        }
+        .padding(16)
+        .frame(width: 320, height: 280)
+    }
+}
+
+struct FailedUsageView: View {
+    @Bindable var store: TallyStore
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Tally")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 12)
+            Text(store.loadError ?? "Couldn’t reach the gateway.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+            Button("Retry", action: store.reloadSpend)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            Button("Sign out") {
+                store.signOut()
+            }
+            .buttonStyle(.bordered)
+            Spacer(minLength: 12)
+        }
+        .padding(16)
+        .frame(width: 320, height: 280)
     }
 }

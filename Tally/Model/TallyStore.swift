@@ -5,7 +5,11 @@ import SwiftUI
 @MainActor
 @Observable
 final class TallyStore {
-    let ledger = Ledger.shared
+    var ledger = Ledger(requests: [], now: Date(), dayStart: .utcMidnight)
+    var isLoadingUsage = false
+    var loadError: String?
+    private var loadGeneration = 0
+    private var seededLevels = false
 
     var isSignedIn: Bool {
         didSet { persist() }
@@ -41,7 +45,10 @@ final class TallyStore {
         }
     }
     var dayStart: DayStart {
-        didSet { persist() }
+        didSet {
+            persist()
+            ledger = Ledger(requests: ledger.requests, now: Date(), dayStart: dayStart)
+        }
     }
     var appearance: AppearanceChoice {
         didSet { persist() }
@@ -83,6 +90,7 @@ final class TallyStore {
         didSet {
             persist()
             reloadQuotas()
+            reloadSpend()
         }
     }
     var quotas: [WidgetSource: QuotaReading] = [:]
@@ -121,9 +129,9 @@ final class TallyStore {
 
     init() {
         let defaults = UserDefaults.standard
-        let signedIn = defaults.object(forKey: Key.signedIn) as? Bool ?? true
+        let signedIn = defaults.object(forKey: Key.signedIn) as? Bool ?? false
         isSignedIn = signedIn
-        lastUpdated = Ledger.shared.snapshot
+        lastUpdated = Date()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: Key.menuBar) ?? "") ?? .spend
         refreshSeconds = defaults.object(forKey: Key.refresh) as? Int ?? 60
@@ -171,12 +179,20 @@ final class TallyStore {
         announcedMonthly = .ok
         announcedDaily = dailyLevel
         announcedMonthly = monthlyLevel
+        if apiKey.isEmpty {
+            isSignedIn = false
+        }
         #if DEBUG
         QuotaReader.selfCheck()
+        GatewayClient.selfCheck()
         #endif
         restartRefreshLoop()
         if !quotaSources.isEmpty {
             reloadQuotas()
+        }
+        if isSignedIn {
+            isLoadingUsage = true
+            Task { await loadGateway() }
         }
     }
 
@@ -215,8 +231,25 @@ final class TallyStore {
 
     var phase: SessionPhase {
         if !isSignedIn { return .signedOut }
-        if requests(on: ledger.snapshot).isEmpty { return .empty }
+        if ledger.requests.isEmpty && isLoadingUsage { return .loading }
+        if ledger.requests.isEmpty && loadError != nil { return .failed }
+        if requests(on: Date()).isEmpty { return .empty }
         return .live
+    }
+
+    var knownModels: [AIModel] {
+        var models: [String: AIModel] = [:]
+        for request in ledger.requests {
+            models[request.model.id] = request.model
+        }
+        for key in modelCaps.keys where models[key] == nil {
+            models[key] = AIModel(key)
+        }
+        return models.values.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+    }
+
+    var knownConversations: [String] {
+        Set(ledger.requests.map(\.conversation).filter { $0 != "—" }).sorted()
     }
 
     var todayFraction: Double { fraction(ledger.todaySpend, of: dailyBudget) }
@@ -263,25 +296,34 @@ final class TallyStore {
         return value
     }
 
-    func signIn(apiKey enteredKey: String?) -> Bool {
-        if let enteredKey {
-            let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, KeychainStore.set(trimmed, account: "apiKey") else { return false }
-            apiKey = trimmed
-            authMethod = .apiKey
-        } else {
-            authMethod = .browser
+    func signIn(apiKey enteredKey: String) async -> String? {
+        let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Enter an API key to continue." }
+        guard KeychainStore.set(trimmed, account: "apiKey") else {
+            return "Couldn’t save the API key to the Keychain."
+        }
+        apiKey = trimmed
+        authMethod = .apiKey
+        if let error = await loadGateway() {
+            apiKey = ""
+            KeychainStore.remove(account: "apiKey")
+            loadError = nil
+            return error
         }
         isSignedIn = true
         layout = .compact
         detailTab = .overview
-        return true
+        return nil
     }
 
     func signOut() {
         isSignedIn = false
         layout = .compact
         apiKey = ""
+        loadError = nil
+        isLoadingUsage = false
+        loadGeneration += 1
+        ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
         KeychainStore.remove(account: "session")
         KeychainStore.remove(account: "apiKey")
     }
@@ -293,12 +335,26 @@ final class TallyStore {
         }
     }
 
-    @discardableResult
-    func replaceAPIKey(_ value: String) -> Bool {
+    func replaceAPIKey(_ value: String) async -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, KeychainStore.set(trimmed, account: "apiKey") else { return false }
+        guard !trimmed.isEmpty else { return "Enter an API key to continue." }
+        let previous = apiKey
+        guard KeychainStore.set(trimmed, account: "apiKey") else {
+            return "Couldn’t save the API key to the Keychain."
+        }
         apiKey = trimmed
-        return true
+        authMethod = .apiKey
+        if let error = await loadGateway() {
+            apiKey = previous
+            if previous.isEmpty {
+                KeychainStore.remove(account: "apiKey")
+            } else {
+                _ = KeychainStore.set(previous, account: "apiKey")
+            }
+            return error
+        }
+        isSignedIn = true
+        return nil
     }
 
     func modelTotals(for period: DateRange) -> [ModelTotal] {
@@ -321,7 +377,7 @@ final class TallyStore {
         case .thisMonth:
             return ledger.monthConversations.filter { matchesConversation($0.name) }
         case .today:
-            return conversationTotals(in: requests(on: ledger.snapshot))
+            return conversationTotals(in: requests(on: Date()))
         case .last7Days, .last30Days:
             return conversationTotals(in: requests(in: period))
         }
@@ -339,7 +395,8 @@ final class TallyStore {
 
     func requests(in range: DateRange) -> [UsageRequest] {
         let start = rangeStart(range)
-        return ledger.requests.filter { $0.time >= start && $0.time <= ledger.snapshot }
+        let now = Date()
+        return ledger.requests.filter { $0.time >= start && $0.time <= now }
     }
 
     func topModelToday() -> ModelTotal? {
@@ -347,11 +404,12 @@ final class TallyStore {
     }
 
     func limitEstimate() -> String? {
-        let start = dayStart.boundary(containing: ledger.snapshot)
-        let elapsed = ledger.snapshot.timeIntervalSince(start)
+        let now = Date()
+        let start = dayStart.boundary(containing: now)
+        let elapsed = now.timeIntervalSince(start)
         guard elapsed > 60, ledger.todaySpend > 0, ledger.todaySpend < dailyBudget else { return nil }
         let rate = ledger.todaySpend / elapsed
-        let eta = ledger.snapshot.addingTimeInterval((dailyBudget - ledger.todaySpend) / rate)
+        let eta = now.addingTimeInterval((dailyBudget - ledger.todaySpend) / rate)
         return Format.clock(eta)
     }
 
@@ -397,7 +455,7 @@ final class TallyStore {
     }
 
     private func rangeStart(_ range: DateRange) -> Date {
-        let day = dayStart.boundary(containing: ledger.snapshot)
+        let day = dayStart.boundary(containing: Date())
         switch range {
         case .today:
             return day
@@ -407,7 +465,7 @@ final class TallyStore {
             return dayStart.addingDays(-29, to: day)
         case .thisMonth:
             let calendar = Calendar.current
-            return calendar.date(from: calendar.dateComponents([.year, .month], from: ledger.snapshot)) ?? day
+            return calendar.date(from: calendar.dateComponents([.year, .month], from: Date())) ?? day
         }
     }
 
@@ -469,8 +527,9 @@ final class TallyStore {
 
     private func daysLeftInMonth() -> Int {
         let calendar = Calendar.current
-        let day = calendar.component(.day, from: ledger.snapshot)
-        let range = calendar.range(of: .day, in: .month, for: ledger.snapshot)
+        let now = Date()
+        let day = calendar.component(.day, from: now)
+        let range = calendar.range(of: .day, in: .month, for: now)
         return max((range?.count ?? day) - day, 0)
     }
 
@@ -533,6 +592,43 @@ final class TallyStore {
         }
     }
 
+    func refresh() {
+        reloadQuotas()
+        reloadSpend()
+    }
+
+    func reloadSpend() {
+        guard gatewayEnabled, isSignedIn, !apiKey.isEmpty else { return }
+        Task { await loadGateway() }
+    }
+
+    @discardableResult
+    func loadGateway() async -> String? {
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoadingUsage = true
+        let result = await GatewayClient.fetch(baseURL: gatewayURL, apiKey: apiKey)
+        guard generation == loadGeneration else { return nil }
+        isLoadingUsage = false
+        switch result {
+        case .success(let rows):
+            ledger = Ledger(requests: rows, now: Date(), dayStart: dayStart)
+            lastUpdated = Date()
+            loadError = nil
+            if seededLevels {
+                considerNotifications()
+            } else {
+                announcedDaily = dailyLevel
+                announcedMonthly = monthlyLevel
+                seededLevels = true
+            }
+            return nil
+        case .failure(let error):
+            loadError = error.message
+            return error.message
+        }
+    }
+
     private func restartRefreshLoop() {
         refreshTask?.cancel()
         let seconds = refreshSeconds
@@ -540,7 +636,7 @@ final class TallyStore {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                self?.reloadQuotas()
+                self?.refresh()
             }
         }
     }
@@ -608,6 +704,8 @@ final class TallyStore {
 
 enum SessionPhase {
     case signedOut
+    case loading
+    case failed
     case live
     case empty
 }

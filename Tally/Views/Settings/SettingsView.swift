@@ -154,7 +154,7 @@ private struct GatewaySettings: View {
                     Text("Team").tag("team")
                 }
                 TextField("Gateway URL", text: $store.gatewayURL)
-                Picker("LiteLLM", selection: $store.gatewayVersion) {
+                Picker("Adapter", selection: $store.gatewayVersion) {
                     ForEach(GatewayVersion.allCases) { version in
                         Text(version.title).tag(version)
                     }

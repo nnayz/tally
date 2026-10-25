@@ -4,16 +4,24 @@ import Foundation
 enum GatewayVersion: String, CaseIterable, Identifiable {
     case v1_106_2 = "1.106.2"
     case v1_49_6 = "1.49.6"
+    case connector = "connector"
 
     var id: String { rawValue }
 
-    var title: String { "LiteLLM \(rawValue)" }
+    var title: String {
+        switch self {
+        case .connector: "Connector"
+        default: "LiteLLM \(rawValue)"
+        }
+    }
 
     /// Spend logs are mounted on the gateway origin. A client base such as `/v1` is not part of the path.
+    /// The connector path is the public contract, not a route on the private gateway.
     var spendPath: String {
         switch self {
         case .v1_106_2: "/spend/logs/v2"
         case .v1_49_6: "/spend/logs"
+        case .connector: "/tally/v1/requests"
         }
     }
 }
@@ -171,6 +179,15 @@ enum GatewayClient {
             return .failure(failure)
         }
         let approved = hostKey(of: trimmed)
+        if version == .connector {
+            return await fetchContract(
+                components: components,
+                apiKey: apiKey,
+                approvedHostKey: approved,
+                keyPageURL: keyPageURL,
+                now: now
+            )
+        }
 
         let start = windowStart(now)
         let paged = version == .v1_106_2
@@ -521,6 +538,74 @@ enum GatewayClient {
         assert(hostedReport.text.contains(Failure.profileMissing.message))
         assert(hostedReport.text.contains("Operator: \(Failure.profileMissing.action)"))
         assert(!hostedReport.text.contains(setupSecret))
+
+        assert(presetSpendURL("https://connect.example.com/v1", version: .connector) == "https://connect.example.com/tally/v1/requests")
+        let promptSecret = "prompt-secret"
+        let contract = Data(
+            """
+            {"format":1,"events":[
+              {"id":"same","time":"2026-10-24 12:00:00","model":"gpt-4o","input":2,"output":1,"spend":1.5,"status":200,"session":"draft","messages":[{"content":"\(promptSecret)"}],"response":"hidden-body","user":"alice"},
+              {"id":"same","time":"2026-10-24 12:00:01","model":"gpt-4o","input":9,"output":9,"spend":9,"status":200,"session":"other"}
+            ]}
+            """.utf8
+        )
+        guard case .success(let contractRows) = contractRows(contract) else {
+            assertionFailure("connector rows")
+            return
+        }
+        assert(contractRows.allSatisfy { $0["messages"] == nil && $0["response"] == nil && $0["user"] == nil })
+        let contractRead = finish(contractRows, now: now, version: .connector)
+        assert(contractRead.requests.count == 1)
+        assert(contractRead.requests[0].requestID == "same")
+        assert(contractRead.requests[0].cost == 1.5)
+        assert(contractRead.requests[0].conversation == "draft")
+        assert(!contractRead.requests[0].conversation.contains(promptSecret))
+        let connectorProfile = ConnectionProfile(
+            format: 1,
+            organization: "Example",
+            adapter: GatewayVersion.connector.rawValue,
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(
+                    url: "https://connect.example.com/tally/v1/requests",
+                    capability: "spend",
+                    credential: "apiKey"
+                ),
+            ],
+            keyPageURL: "https://connect.example.com/keys",
+            permissions: ["Read spend logs"],
+            helpURL: "",
+            scope: "this user",
+            window: "Earlier of this month and 30 days ago",
+            freshness: "60 seconds"
+        )
+        guard case .success(let connectorEncoded) = connectorProfile.encoded() else {
+            assertionFailure("connector profile")
+            return
+        }
+        let connectorText = String(decoding: connectorEncoded, as: UTF8.self)
+        assert(connectorText.contains("connect.example.com"))
+        assert(!connectorText.contains("10.1.2.3"))
+        assert(!connectorText.contains(promptSecret))
+        let privateConnector = ConnectionProfile(
+            format: 1,
+            organization: "Local",
+            adapter: "connector",
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(url: "https://10.1.2.3/tally/v1/requests", capability: "spend", credential: "apiKey"),
+            ],
+            keyPageURL: "https://connect.example.com/keys",
+            permissions: ["Read spend logs"],
+            helpURL: "",
+            scope: "this key",
+            window: "",
+            freshness: ""
+        )
+        guard case .failure = privateConnector.encoded() else {
+            assertionFailure("private connector")
+            return
+        }
     }
     #endif
 
@@ -530,6 +615,68 @@ enum GatewayClient {
         case dailyTotals
         case loginPage
         case unsupported
+    }
+
+    /// One public read. Prompt and response bodies are dropped before the row is kept.
+    private static func fetchContract(
+        components: URLComponents,
+        apiKey: String,
+        approvedHostKey: String,
+        keyPageURL: String,
+        now: Date
+    ) async -> Result<Read, Failure> {
+        var components = components
+        let start = windowStart(now)
+        components.queryItems = [
+            URLQueryItem(name: "start", value: timestamp(start)),
+            URLQueryItem(name: "end", value: timestamp(now)),
+        ]
+        guard let url = components.url else { return .failure(.invalidURL) }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        switch await send(request, approvedHostKey: approvedHostKey, keyPageURL: keyPageURL) {
+        case .data(let data):
+            switch contractRows(data) {
+            case .failure(let failure):
+                return .failure(failure)
+            case .success(let rows):
+                return .success(finish(rows, now: now, version: .connector))
+            }
+        case .status(let code):
+            return .failure(.http(code))
+        case .redirect:
+            return .failure(.redirected)
+        case .unreachable:
+            return .failure(.unreachable)
+        }
+    }
+
+    static func contractRows(_ data: Data) -> Result<[[String: Any]], Failure> {
+        if isHTML(data) { return .failure(.loginPage) }
+        guard let parsed = try? JSONSerialization.jsonObject(with: data),
+              let object = parsed as? [String: Any] else {
+            return .failure(.unsupported)
+        }
+        let format = (object["format"] as? NSNumber)?.intValue ?? 0
+        guard format == 1, let events = object["events"] as? [[String: Any]] else {
+            return .failure(.unsupported)
+        }
+        let rows: [[String: Any]] = events.map { event in
+            [
+                "request_id": text(event["id"]),
+                "startTime": text(event["time"]),
+                "model": text(event["model"]),
+                "prompt_tokens": number(event["input"]),
+                "completion_tokens": number(event["output"]),
+                "spend": number(event["spend"]),
+                "status": event["status"] ?? 200,
+                "session_id": text(event["session"]),
+            ]
+        }
+        guard rows.allSatisfy(isRequestRow) else { return .failure(.unsupported) }
+        return .success(rows)
     }
 
     private static func classify(_ data: Data) -> Body {
@@ -571,7 +718,7 @@ enum GatewayClient {
 
     private static func finish(_ rows: [[String: Any]], now: Date, version: GatewayVersion) -> Read {
         var requests = deduped(parse(rows))
-        if version == .v1_49_6 {
+        if version == .v1_49_6 || version == .connector {
             let start = windowStart(now)
             requests = requests.filter { $0.time >= start && $0.time <= now }
         }
@@ -1127,8 +1274,8 @@ struct ConnectionProfile: Codable, Equatable {
         }
         if GatewayVersion(rawValue: adapter) == nil {
             return GatewayClient.Failure(
-                message: "This profile names an unsupported LiteLLM version.",
-                action: "Use LiteLLM 1.49.6 or 1.106.2."
+                message: "This profile names an unsupported adapter.",
+                action: "Use LiteLLM 1.49.6, LiteLLM 1.106.2, or a connector."
             )
         }
         if auth != "apiKey" {

@@ -144,6 +144,26 @@ final class TallyStore {
     var helpURL: String {
         didSet { persist() }
     }
+    var authorizationURL: String {
+        didSet { persist() }
+    }
+    var tokenURL: String {
+        didSet { persist() }
+    }
+    var revocationURL: String {
+        didSet { persist() }
+    }
+    var clientID: String {
+        didSet { persist() }
+    }
+    var trackingExpiry: TimeInterval {
+        didSet { persist() }
+    }
+    var trackingTokenHost: String {
+        didSet { persist() }
+    }
+    var authError: String?
+    private var pendingChallenge: (verifier: String, state: String)?
     var profileWindow: String {
         didSet { persist() }
     }
@@ -212,6 +232,12 @@ final class TallyStore {
         case "team": "Team"
         default: "This key"
         }
+    }
+
+    var showsExchange: Bool {
+        !authorizationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !tokenURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var spendURLBinding: Binding<String> {
@@ -293,6 +319,12 @@ final class TallyStore {
         profileScope = ["this key", "this user", "team"].contains(storedScope) ? storedScope : "this key"
         profilePermissions = defaults.stringArray(forKey: Key.profilePermissions) ?? ["Read spend logs"]
         helpURL = defaults.string(forKey: Key.helpURL) ?? ""
+        authorizationURL = defaults.string(forKey: Key.authorizationURL) ?? ""
+        tokenURL = defaults.string(forKey: Key.tokenURL) ?? ""
+        revocationURL = defaults.string(forKey: Key.revocationURL) ?? ""
+        clientID = defaults.string(forKey: Key.clientID) ?? ""
+        trackingExpiry = defaults.object(forKey: Key.trackingExpiry) as? TimeInterval ?? 0
+        trackingTokenHost = defaults.string(forKey: Key.trackingTokenHost) ?? ""
         profileWindow = defaults.string(forKey: Key.profileWindow) ?? ""
         profileFreshness = defaults.string(forKey: Key.profileFreshness) ?? ""
         profileSource = defaults.string(forKey: Key.profileSource) ?? "Entered on this Mac"
@@ -444,12 +476,104 @@ final class TallyStore {
         return nil
     }
 
+    func beginTrackingSignIn() -> String? {
+        authError = nil
+        let authorization = authorizationURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = tokenURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let client = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !authorization.isEmpty, !token.isEmpty, !client.isEmpty else {
+            return "This gateway needs an operator integration."
+        }
+        if let failure = screenConfiguredLinks() {
+            return failure.message
+        }
+        let made = TrackingAuth.makeChallenge()
+        let state = TrackingAuth.randomState()
+        guard let url = TrackingAuth.authorizeURL(
+            endpoint: authorization,
+            clientID: client,
+            state: state,
+            challenge: made.challenge
+        ) else {
+            return "This gateway needs an operator integration."
+        }
+        if !apiKey.isEmpty, url.absoluteString.contains(apiKey) {
+            return "The sign-in request contained the API key and was not opened."
+        }
+        pendingChallenge = (verifier: made.verifier, state: state)
+        NSWorkspace.shared.open(url)
+        return nil
+    }
+
+    func completeTrackingSignIn(_ url: URL) async -> String? {
+        guard url.scheme?.lowercased() == "tally", url.host?.lowercased() == "callback" else { return nil }
+        guard let pending = pendingChallenge else { return nil }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func query(_ name: String) -> String? {
+            items.first { $0.name == name }?.value
+        }
+        if query("error") != nil {
+            pendingChallenge = nil
+            return "The operator did not issue a tracking key."
+        }
+        guard query("state") == pending.state else {
+            pendingChallenge = nil
+            return "The sign-in response did not match this request. Start sign-in again."
+        }
+        guard let code = query("code")?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty else {
+            pendingChallenge = nil
+            return "The sign-in response did not include a code."
+        }
+        let client = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let form = TrackingAuth.codeForm(clientID: client, code: code, verifier: pending.verifier)
+        pendingChallenge = nil
+        if !apiKey.isEmpty, form.contains(apiKey) || tokenURL.contains(apiKey) {
+            return "The sign-in request contained the API key and was not sent."
+        }
+        let previousKey = apiKey
+        let wasSignedIn = isSignedIn
+        let previousApproved = approvedHostKey
+        let previousRefresh = KeychainStore.string(account: "refreshToken")
+        let previousExpiry = trackingExpiry
+        let previousHost = trackingTokenHost
+        let previousScope = profileScope
+        switch await GatewayClient.redeem(tokenURL: tokenURL, form: form) {
+        case .failure(let failure):
+            return failure.message
+        case .success(let credential):
+            if let error = await signIn(apiKey: credential.accessToken) {
+                if previousKey.isEmpty {
+                    isSignedIn = false
+                } else if KeychainStore.set(previousKey, account: "apiKey") {
+                    apiKey = previousKey
+                    approvedHostKey = previousApproved
+                    isSignedIn = wasSignedIn
+                }
+                if let previousRefresh {
+                    _ = KeychainStore.set(previousRefresh, account: "refreshToken")
+                }
+                trackingExpiry = previousExpiry
+                trackingTokenHost = previousHost
+                profileScope = previousScope
+                return error
+            }
+            if let refresh = credential.refreshToken, !refresh.isEmpty {
+                _ = KeychainStore.set(refresh, account: "refreshToken")
+            }
+            trackingExpiry = Date().timeIntervalSince1970 + credential.expiresIn
+            trackingTokenHost = GatewayClient.hostKey(of: tokenURL)
+            profileScope = credential.scope
+            return nil
+        }
+    }
+
     func signIn(apiKey enteredKey: String) async -> String? {
         let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Enter an API key to continue." }
-        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+        if let failure = screenConfiguredLinks() {
             return failure.message
         }
+        clearTrackingCredential()
         guard KeychainStore.set(trimmed, account: "apiKey") else {
             return "Couldn’t save the API key to the Keychain."
         }
@@ -471,6 +595,12 @@ final class TallyStore {
     }
 
     func signOut() {
+        let refresh = KeychainStore.string(account: "refreshToken") ?? ""
+        let pin = trackingTokenHost
+        let revocation = revocationURL
+        pendingChallenge = nil
+        authError = nil
+        clearTrackingCredential()
         isSignedIn = false
         layout = .compact
         apiKey = ""
@@ -489,6 +619,11 @@ final class TallyStore {
         ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
         KeychainStore.remove(account: "session")
         KeychainStore.remove(account: "apiKey")
+        if !refresh.isEmpty, GatewayClient.hostKey(of: revocation) == pin, !pin.isEmpty {
+            Task {
+                await GatewayClient.revoke(revocationURL: revocation, token: refresh, pinnedHost: pin)
+            }
+        }
     }
 
     func snoozeToday() {
@@ -503,7 +638,16 @@ final class TallyStore {
         guard !trimmed.isEmpty else { return "Enter an API key to continue." }
         guard keyApproved else { return GatewayClient.Failure.unapproved.message }
         let previous = apiKey
+        let previousRefresh = KeychainStore.string(account: "refreshToken")
+        let previousExpiry = trackingExpiry
+        let previousHost = trackingTokenHost
+        clearTrackingCredential()
         guard KeychainStore.set(trimmed, account: "apiKey") else {
+            if let previousRefresh {
+                _ = KeychainStore.set(previousRefresh, account: "refreshToken")
+            }
+            trackingExpiry = previousExpiry
+            trackingTokenHost = previousHost
             return "Couldn’t save the API key to the Keychain."
         }
         apiKey = trimmed
@@ -515,6 +659,11 @@ final class TallyStore {
             } else {
                 _ = KeychainStore.set(previous, account: "apiKey")
             }
+            if let previousRefresh {
+                _ = KeychainStore.set(previousRefresh, account: "refreshToken")
+            }
+            trackingExpiry = previousExpiry
+            trackingTokenHost = previousHost
             return error
         }
         isSignedIn = true
@@ -782,6 +931,14 @@ final class TallyStore {
         loadGeneration += 1
         let generation = loadGeneration
         isLoadingUsage = true
+        if let message = await refreshTrackingIfNeeded() {
+            guard generation == loadGeneration else { return nil }
+            isLoadingUsage = false
+            loadError = message
+            loadFailure = GatewayClient.Failure(message: message, action: "Sign in again.")
+            loadNotice = nil
+            return message
+        }
         let result = await GatewayClient.fetch(
             spendURL: spendURL,
             version: gatewayVersion,
@@ -842,8 +999,60 @@ final class TallyStore {
         )
     }
 
+    private func blank(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func screenConfiguredLinks() -> GatewayClient.Failure? {
+        GatewayClient.screen(
+            spendURL: spendURL,
+            keyPageURL: keyPageURL,
+            helpURL: helpURL,
+            authorizationURL: authorizationURL,
+            tokenURL: tokenURL,
+            revocationURL: revocationURL
+        )
+    }
+
+    private func clearTrackingCredential() {
+        trackingExpiry = 0
+        trackingTokenHost = ""
+        KeychainStore.remove(account: "refreshToken")
+    }
+
+    /// An expired issued key is refreshed or dropped. A pasted key has no expiry and is left alone.
+    private func refreshTrackingIfNeeded() async -> String? {
+        guard TrackingAuth.isExpired(expiry: trackingExpiry, now: Date()) else { return nil }
+        let refresh = KeychainStore.string(account: "refreshToken") ?? ""
+        let tokenHost = GatewayClient.hostKey(of: tokenURL)
+        let client = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !refresh.isEmpty, !client.isEmpty, !tokenHost.isEmpty, tokenHost == trackingTokenHost else {
+            return "This tracking key expired. Sign in again."
+        }
+        let form = TrackingAuth.refreshForm(clientID: client, refreshToken: refresh)
+        if !apiKey.isEmpty, form.contains(apiKey) {
+            return "This tracking key expired. Sign in again."
+        }
+        switch await GatewayClient.redeem(tokenURL: tokenURL, form: form) {
+        case .failure:
+            return "This tracking key expired. Sign in again."
+        case .success(let credential):
+            guard KeychainStore.set(credential.accessToken, account: "apiKey") else {
+                return "Couldn’t save the API key to the Keychain."
+            }
+            apiKey = credential.accessToken
+            if let next = credential.refreshToken, !next.isEmpty {
+                _ = KeychainStore.set(next, account: "refreshToken")
+            }
+            trackingExpiry = Date().timeIntervalSince1970 + credential.expiresIn
+            profileScope = credential.scope
+            return nil
+        }
+    }
+
     func approveSpendHost() async -> String? {
-        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+        if let failure = screenConfiguredLinks() {
             loadError = failure.message
             loadFailure = failure
             loadNotice = nil
@@ -866,7 +1075,10 @@ final class TallyStore {
             if let failure = GatewayClient.screen(
                 spendURL: profile.spendURL,
                 keyPageURL: profile.keyPageURL,
-                helpURL: profile.helpURL
+                helpURL: profile.helpURL,
+                authorizationURL: profile.authorizationURL ?? "",
+                tokenURL: profile.tokenURL ?? "",
+                revocationURL: profile.revocationURL ?? ""
             ) {
                 return failure.message
             }
@@ -927,7 +1139,7 @@ final class TallyStore {
     }
 
     func exportProfile(to url: URL) -> String? {
-        if let failure = GatewayClient.screen(spendURL: spendURL, keyPageURL: keyPageURL, helpURL: helpURL) {
+        if let failure = screenConfiguredLinks() {
             return failure.message
         }
         switch makeProfile().encoded() {
@@ -963,7 +1175,11 @@ final class TallyStore {
             helpURL: helpURL.trimmingCharacters(in: .whitespacesAndNewlines),
             scope: scope,
             window: profileWindow.isEmpty ? "Earlier of this month and 30 days ago" : profileWindow,
-            freshness: profileFreshness.isEmpty ? "\(refreshSeconds) seconds" : profileFreshness
+            freshness: profileFreshness.isEmpty ? "\(refreshSeconds) seconds" : profileFreshness,
+            authorizationURL: blank(authorizationURL),
+            tokenURL: blank(tokenURL),
+            revocationURL: blank(revocationURL),
+            clientID: blank(clientID)
         )
     }
 
@@ -973,6 +1189,10 @@ final class TallyStore {
         profileScope = profile.scope
         profilePermissions = profile.permissions
         helpURL = profile.helpURL
+        authorizationURL = profile.authorizationURL ?? ""
+        tokenURL = profile.tokenURL ?? ""
+        revocationURL = profile.revocationURL ?? ""
+        clientID = profile.clientID ?? ""
         profileWindow = profile.window
         profileFreshness = profile.freshness
         profileSource = source
@@ -1064,6 +1284,12 @@ final class TallyStore {
         defaults.set(profileScope, forKey: Key.profileScope)
         defaults.set(profilePermissions, forKey: Key.profilePermissions)
         defaults.set(helpURL, forKey: Key.helpURL)
+        defaults.set(authorizationURL, forKey: Key.authorizationURL)
+        defaults.set(tokenURL, forKey: Key.tokenURL)
+        defaults.set(revocationURL, forKey: Key.revocationURL)
+        defaults.set(clientID, forKey: Key.clientID)
+        defaults.set(trackingExpiry, forKey: Key.trackingExpiry)
+        defaults.set(trackingTokenHost, forKey: Key.trackingTokenHost)
         defaults.set(profileWindow, forKey: Key.profileWindow)
         defaults.set(profileFreshness, forKey: Key.profileFreshness)
         defaults.set(profileSource, forKey: Key.profileSource)
@@ -1100,6 +1326,12 @@ final class TallyStore {
         static let profileScope = "profileScope"
         static let profilePermissions = "profilePermissions"
         static let helpURL = "helpURL"
+        static let authorizationURL = "authorizationURL"
+        static let tokenURL = "tokenURL"
+        static let revocationURL = "revocationURL"
+        static let clientID = "clientID"
+        static let trackingExpiry = "trackingExpiry"
+        static let trackingTokenHost = "trackingTokenHost"
         static let profileWindow = "profileWindow"
         static let profileFreshness = "profileFreshness"
         static let profileSource = "profileSource"

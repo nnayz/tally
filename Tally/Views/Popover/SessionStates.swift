@@ -123,6 +123,23 @@ struct SignInView: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
             .padding(.top, 8)
+            if store.showsExchange {
+                Button(store.isLoadingUsage ? "Checking…" : "Sign in") {
+                    apiKeyError = store.beginTrackingSignIn()
+                }
+                .disabled(store.isLoadingUsage)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+            }
+            if let authError = store.authError {
+                Text(authError)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
             Button("Get a key") {
                 apiKeyError = store.openKeyPage()
             }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -22,6 +23,148 @@ enum GatewayVersion: String, CaseIterable, Identifiable {
         case .v1_106_2: "/spend/logs/v2"
         case .v1_49_6: "/spend/logs"
         case .connector: "/tally/v1/requests"
+        }
+    }
+}
+
+enum TrackingAuth {
+    struct Credential: Equatable {
+        var accessToken: String
+        var expiresIn: TimeInterval
+        var refreshToken: String?
+        var scope: String
+    }
+
+    static let redirectURI = "tally://callback"
+
+    static func makeChallenge(verifier: String = randomVerifier()) -> (verifier: String, challenge: String) {
+        let digest = SHA256.hash(data: Data(verifier.utf8))
+        let challenge = Data(digest).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return (verifier, challenge)
+    }
+
+    /// Query is only the code exchange. There is no parameter for a master key or a tracking key.
+    static func authorizeURL(endpoint: String, clientID: String, state: String, challenge: String) -> URL? {
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed),
+              components.scheme == "https",
+              components.host?.isEmpty == false else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "code_challenge", value: challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "scope", value: "spend.read"),
+        ]
+        return components.url
+    }
+
+    static func codeForm(clientID: String, code: String, verifier: String) -> String {
+        form([
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirectURI),
+            ("client_id", clientID),
+            ("code_verifier", verifier),
+        ])
+    }
+
+    static func refreshForm(clientID: String, refreshToken: String) -> String {
+        form([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refreshToken),
+            ("client_id", clientID),
+        ])
+    }
+
+    static func revokeForm(token: String) -> String {
+        form([
+            ("token", token),
+            ("token_type_hint", "refresh_token"),
+        ])
+    }
+
+    static func parse(_ data: Data) -> Result<Credential, GatewayClient.Failure> {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(rejected)
+        }
+        guard let access = object["access_token"] as? String, !access.isEmpty else {
+            return .failure(rejected)
+        }
+        let expiresIn: TimeInterval
+        if let number = object["expires_in"] as? NSNumber {
+            expiresIn = number.doubleValue
+        } else if let text = object["expires_in"] as? String, let value = TimeInterval(text) {
+            expiresIn = value
+        } else {
+            return .failure(rejected)
+        }
+        guard expiresIn > 0 else { return .failure(rejected) }
+        let refresh = object["refresh_token"] as? String
+        let rawScope = (object["scope"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let scope = (rawScope == "this user" || rawScope == "team") ? rawScope : "this key"
+        return .success(Credential(
+            accessToken: access,
+            expiresIn: expiresIn,
+            refreshToken: refresh.flatMap { $0.isEmpty ? nil : $0 },
+            scope: scope
+        ))
+    }
+
+    /// A pasted key has no expiry. An issued key is expired at the stored instant.
+    static func isExpired(expiry: TimeInterval, now: Date) -> Bool {
+        expiry > 0 && now.timeIntervalSince1970 >= expiry
+    }
+
+    static func randomState() -> String {
+        randomToken(count: 32)
+    }
+
+    static let rejected = GatewayClient.Failure(
+        message: "The operator did not issue a tracking key.",
+        action: "Sign in again."
+    )
+
+    private static func randomVerifier() -> String {
+        randomToken(count: 43)
+    }
+
+    private static func randomToken(count: Int) -> String {
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        var generator = SystemRandomNumberGenerator()
+        return String((0..<count).map { _ in
+            alphabet[Int(UInt8.random(in: 0...255, using: &generator)) % alphabet.count]
+        })
+    }
+
+    private static func form(_ pairs: [(String, String)]) -> String {
+        pairs.map { "\(encode($0.0))=\(encode($0.1))" }.joined(separator: "&")
+    }
+
+    /// Percent-encode every byte that is not an unreserved character.
+    private static func encode(_ value: String) -> String {
+        var encoded = ""
+        for byte in value.utf8 {
+            if isUnreserved(byte) {
+                encoded.append(Character(UnicodeScalar(byte)))
+            } else {
+                encoded.append(String(format: "%%%02X", byte))
+            }
+        }
+        return encoded
+    }
+
+    private static func isUnreserved(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 0x41...0x5A, 0x61...0x7A, 0x30...0x39, 0x2D, 0x2E, 0x5F, 0x7E:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -587,6 +730,9 @@ enum GatewayClient {
         assert(connectorText.contains("connect.example.com"))
         assert(!connectorText.contains("10.1.2.3"))
         assert(!connectorText.contains(promptSecret))
+        assert(!encodedText.contains("authorizationURL"))
+        assert(!encodedText.contains("access_token"))
+        assert(!encodedText.contains("refresh_token"))
         let privateConnector = ConnectionProfile(
             format: 1,
             organization: "Local",
@@ -606,6 +752,131 @@ enum GatewayClient {
             assertionFailure("private connector")
             return
         }
+
+        let legacy = Data(
+            """
+            {"format":1,"organization":"Example","adapter":"1.106.2","auth":"apiKey","endpoints":[{"url":"https://llm.example.com/spend/logs/v2","capability":"spend","credential":"apiKey"}],"keyPageURL":"https://llm.example.com/key","permissions":["Read spend logs"],"helpURL":"https://llm.example.com/help","scope":"this key","window":"Earlier of this month and 30 days ago","freshness":"60 seconds"}
+            """.utf8
+        )
+        guard case .success(let legacyProfile) = ConnectionProfile.decode(legacy) else {
+            assertionFailure("legacy profile")
+            return
+        }
+        assert(legacyProfile.authorizationURL == nil)
+        assert(legacyProfile.tokenURL == nil)
+        assert(legacyProfile.clientID == nil)
+        assert(legacyProfile == profile)
+
+        var incomplete = profile
+        incomplete.authorizationURL = "https://operator.example.com/authorize"
+        guard case .failure(let incompleteFailure) = incomplete.encoded() else {
+            assertionFailure("incomplete exchange")
+            return
+        }
+        assert(incompleteFailure.message == "This profile’s sign-in exchange is incomplete.")
+        var exchange = profile
+        exchange.authorizationURL = "https://operator.example.com/authorize"
+        exchange.tokenURL = "https://operator.example.com/token"
+        exchange.revocationURL = "https://operator.example.com/revoke"
+        exchange.clientID = "tally"
+        guard case .success(let exchangeData) = exchange.encoded() else {
+            assertionFailure("exchange profile")
+            return
+        }
+        let exchangeText = String(decoding: exchangeData, as: UTF8.self)
+        assert(exchangeText.contains("authorizationURL"))
+        assert(exchangeText.contains("\"clientID\" : \"tally\"") || exchangeText.contains("\"clientID\": \"tally\""))
+        assert(!exchangeText.contains("access_token"))
+        assert(!exchangeText.contains("refresh_token"))
+        assert(!exchangeText.contains("sk-master"))
+        var privateExchange = exchange
+        privateExchange.tokenURL = "https://127.0.0.1/token"
+        guard case .failure = privateExchange.encoded() else {
+            assertionFailure("private token url")
+            return
+        }
+
+        let verifier = String(repeating: "a", count: 43)
+        let made = TrackingAuth.makeChallenge(verifier: verifier)
+        assert(made.challenge == "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA")
+        guard let authorize = TrackingAuth.authorizeURL(
+            endpoint: "https://operator.example.com/authorize",
+            clientID: "tally",
+            state: "state-1",
+            challenge: made.challenge
+        ), let authorizeItems = URLComponents(url: authorize, resolvingAgainstBaseURL: false)?.queryItems else {
+            assertionFailure("authorize url")
+            return
+        }
+        assert(authorizeItems.first { $0.name == "code_challenge" }?.value == made.challenge)
+        assert(authorizeItems.first { $0.name == "code_challenge_method" }?.value == "S256")
+        assert(authorizeItems.first { $0.name == "scope" }?.value == "spend.read")
+        let authorizeNames = Set(authorizeItems.map(\.name))
+        assert(authorizeNames == [
+            "response_type", "client_id", "redirect_uri", "state",
+            "code_challenge", "code_challenge_method", "scope",
+        ])
+        let authorizeText = authorize.absoluteString
+        assert(!authorizeText.contains("sk-master"))
+        assert(!authorizeText.contains("sk-existing"))
+        assert(!authorizeText.contains("api_key"))
+        assert(!authorizeText.contains("master_key"))
+        let codeForm = TrackingAuth.codeForm(clientID: "tally", code: "code-1", verifier: verifier)
+        assert(codeForm.contains("code_verifier=\(verifier)"))
+        assert(codeForm.contains("redirect_uri=tally%3A%2F%2Fcallback"))
+        assert(!codeForm.contains("sk-master"))
+        assert(!codeForm.contains("api_key"))
+        assert(!codeForm.contains("master_key"))
+        let refreshForm = TrackingAuth.refreshForm(clientID: "tally", refreshToken: "refresh-1")
+        assert(refreshForm.contains("grant_type=refresh_token"))
+        assert(!refreshForm.contains("sk-master"))
+        assert(!refreshForm.contains("api_key"))
+        guard case .failure = TrackingAuth.parse(Data(#"{"access_token":"sk-issued"}"#.utf8)) else {
+            assertionFailure("missing expiry")
+            return
+        }
+        guard case .success(let issued) = TrackingAuth.parse(Data(
+            #"{"access_token":"tk-issued","expires_in":60,"refresh_token":"rt-1","scope":"spend.read"}"#.utf8
+        )) else {
+            assertionFailure("parse token")
+            return
+        }
+        assert(issued.scope == "this key")
+        assert(issued.expiresIn == 60)
+        assert(issued.accessToken == "tk-issued")
+        guard case .success(let team) = TrackingAuth.parse(Data(
+            #"{"access_token":"tk-issued","expires_in":60,"scope":"team"}"#.utf8
+        )) else {
+            assertionFailure("parse team")
+            return
+        }
+        assert(team.scope == "team")
+        assert(team.refreshToken == nil)
+        assert(TrackingAuth.isExpired(expiry: 100, now: Date(timeIntervalSince1970: 100)))
+        assert(!TrackingAuth.isExpired(expiry: 100, now: Date(timeIntervalSince1970: 99)))
+        assert(!TrackingAuth.isExpired(expiry: 0, now: Date(timeIntervalSince1970: 10_000)))
+
+        let userReport = CapabilityReport.make(
+            host: "gateway.example.com",
+            declaredScope: "This user",
+            failure: nil,
+            empty: false,
+            checking: false,
+            synced: now,
+            now: now
+        )
+        assert(userReport.text.contains("Scope: this user"))
+        assert(!userReport.text.contains("Scope: this key only"))
+        let teamReport = CapabilityReport.make(
+            host: "gateway.example.com",
+            declaredScope: "Team",
+            failure: nil,
+            empty: true,
+            checking: false,
+            synced: now,
+            now: now
+        )
+        assert(teamReport.text.contains("Scope: an authorized team"))
     }
     #endif
 
@@ -860,7 +1131,14 @@ enum GatewayClient {
     }
 
     /// Public https hosts only. A private or metadata address never receives the key.
-    static func screen(spendURL: String, keyPageURL: String, helpURL: String = "") -> Failure? {
+    static func screen(
+        spendURL: String,
+        keyPageURL: String,
+        helpURL: String = "",
+        authorizationURL: String = "",
+        tokenURL: String = "",
+        revocationURL: String = ""
+    ) -> Failure? {
         let spend = spendURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: spend), url.scheme == "https", url.host?.isEmpty == false else {
             return .invalidURL
@@ -869,6 +1147,9 @@ enum GatewayClient {
         if let failure = HostGuard.failure(for: url.host ?? "") { return failure }
         if let failure = screenLink(keyPageURL, label: "key page URL") { return failure }
         if let failure = screenLink(helpURL, label: "help URL") { return failure }
+        if let failure = screenLink(authorizationURL, label: "authorization URL") { return failure }
+        if let failure = screenLink(tokenURL, label: "token URL") { return failure }
+        if let failure = screenLink(revocationURL, label: "revocation URL") { return failure }
         return nil
     }
 
@@ -958,7 +1239,14 @@ enum GatewayClient {
             case .failure(let failure):
                 return .failure(failure)
             case .success(let profile):
-                if let failure = screen(spendURL: profile.spendURL, keyPageURL: profile.keyPageURL, helpURL: profile.helpURL) {
+                if let failure = screen(
+                    spendURL: profile.spendURL,
+                    keyPageURL: profile.keyPageURL,
+                    helpURL: profile.helpURL,
+                    authorizationURL: profile.authorizationURL ?? "",
+                    tokenURL: profile.tokenURL ?? "",
+                    revocationURL: profile.revocationURL ?? ""
+                ) {
                     return .failure(failure)
                 }
                 return .success(profile)
@@ -974,6 +1262,49 @@ enum GatewayClient {
         case .unreachable:
             return .failure(.profileUnreachable)
         }
+    }
+
+    /// Posts the code or refresh token. Sends no Authorization header and no client secret.
+    static func redeem(tokenURL: String, form: String) async -> Result<TrackingAuth.Credential, Failure> {
+        let trimmed = tokenURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .failure(Failure(
+                message: "This gateway needs an operator integration.",
+                action: "Add the token URL, or paste a tracking key."
+            ))
+        }
+        if let failure = screenLink(trimmed, label: "token URL") { return .failure(failure) }
+        guard let url = URL(string: trimmed) else { return .failure(.invalidURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.httpBody = Data(form.utf8)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        switch await send(request, approvedHostKey: hostKey(of: trimmed), keyPageURL: "") {
+        case .data(let data):
+            return TrackingAuth.parse(data)
+        case .status:
+            return .failure(TrackingAuth.rejected)
+        case .redirect:
+            return .failure(.redirected)
+        case .unreachable:
+            return .failure(.unreachable)
+        }
+    }
+
+    /// Best effort. The caller has already checked that the revocation host is the host that issued the key.
+    static func revoke(revocationURL: String, token: String, pinnedHost: String) async {
+        let trimmed = revocationURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !token.isEmpty, !pinnedHost.isEmpty else { return }
+        guard hostKey(of: trimmed) == pinnedHost else { return }
+        guard screenLink(trimmed, label: "revocation URL") == nil, let url = URL(string: trimmed) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 12
+        request.httpBody = Data(TrackingAuth.revokeForm(token: token).utf8)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        _ = await send(request, approvedHostKey: pinnedHost, keyPageURL: "")
     }
 
     private static func send(_ request: URLRequest, approvedHostKey: String, keyPageURL: String) async -> Fetch {
@@ -1041,7 +1372,7 @@ struct CapabilityReport: Equatable {
             "Host: \(host)",
             "Profile host: \(profileHost)",
             "Declared scope: \(declaredScope)",
-            "Scope: this key only",
+            "Scope: \(Self.scopePhrase(declaredScope))",
             "Spend and tokens: \(spend)",
             "Models: \(models)",
             "Request history: \(history)",
@@ -1051,6 +1382,14 @@ struct CapabilityReport: Equatable {
             lines.append("Operator: \(action)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func scopePhrase(_ declaredScope: String) -> String {
+        switch declaredScope {
+        case "This user": "this user"
+        case "Team": "an authorized team"
+        default: "this key only"
+        }
     }
 
     static func make(
@@ -1219,6 +1558,10 @@ struct ConnectionProfile: Codable, Equatable {
     var scope: String
     var window: String
     var freshness: String
+    var authorizationURL: String? = nil
+    var tokenURL: String? = nil
+    var revocationURL: String? = nil
+    var clientID: String? = nil
 
     struct Endpoint: Codable, Equatable {
         var url: String
@@ -1303,6 +1646,21 @@ struct ConnectionProfile: Codable, Equatable {
             return .sameDestination
         }
         if let failure = literal(helpURL, label: "help URL", emptyAllowed: true) { return failure }
+        let authorization = authorizationURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = tokenURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let revocation = revocationURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let client = clientID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !authorization.isEmpty || !token.isEmpty || !client.isEmpty {
+            if authorization.isEmpty || token.isEmpty || client.isEmpty {
+                return GatewayClient.Failure(
+                    message: "This profile’s sign-in exchange is incomplete.",
+                    action: "Include the authorization URL, the token URL, and the client id."
+                )
+            }
+        }
+        if let failure = literal(authorization, label: "authorization URL", emptyAllowed: true) { return failure }
+        if let failure = literal(token, label: "token URL", emptyAllowed: true) { return failure }
+        if let failure = literal(revocation, label: "revocation URL", emptyAllowed: true) { return failure }
         if organization.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return GatewayClient.Failure(
                 message: "This profile needs an organization name.",

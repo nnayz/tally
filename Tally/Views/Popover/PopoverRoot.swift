@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct PopoverRoot: View {
@@ -11,10 +12,6 @@ struct PopoverRoot: View {
                 switch store.phase {
                 case .signedOut:
                     SignInView(store: store)
-                case .loading:
-                    LoadingView()
-                case .offline:
-                    OfflineView(store: store)
                 case .empty:
                     EmptyUsageView(store: store)
                 case .live:
@@ -45,12 +42,12 @@ struct PopoverRoot: View {
     }
 
     private func openHistory() {
-        AppWindows.activate()
+        NSApp.activate()
         openWindow(id: TallyWindow.history)
     }
 
     private func showSettings() {
-        AppWindows.activate()
+        NSApp.activate()
         openSettings()
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import ServiceManagement
 import SwiftUI
 
@@ -11,9 +10,6 @@ final class TallyStore {
     var isSignedIn: Bool {
         didSet { persist() }
     }
-    var isLoading = false
-    var isOffline = false
-    var isRefreshing = false
     var lastUpdated: Date
 
     var launchAtLogin: Bool {
@@ -53,13 +49,13 @@ final class TallyStore {
     var dailyBudget: Double {
         didSet {
             persist()
-            considerNotifications(previousDaily: oldValue == 0 ? dailyLevel : level(for: ledger.todaySpend, budget: oldValue))
+            considerNotifications(previousDaily: oldValue == 0 ? dailyLevel : level(spent: ledger.todaySpend, budget: oldValue))
         }
     }
     var monthlyBudget: Double {
         didSet {
             persist()
-            considerNotifications(previousMonthly: level(for: ledger.monthSpend, budget: oldValue))
+            considerNotifications(previousMonthly: level(spent: ledger.monthSpend, budget: oldValue))
         }
     }
     var warningThreshold: Double {
@@ -97,21 +93,23 @@ final class TallyStore {
     var authMethod: AuthMethod {
         didSet { persist() }
     }
-    var accountEmail: String
-    var teamName: String
-    var tokenExpires: Date
     var apiKey: String
 
     var layout: PopoverLayout = .compact
     var detailTab: DetailTab = .overview
-    var modelPeriod: SpendPeriod = .month
-    var conversationPeriod: SpendPeriod = .month
+    var modelPeriod: DateRange = .thisMonth
+    var conversationPeriod: DateRange = .thisMonth
     var modelSort: ModelSort = .cost
     var conversationQuery = ""
     var settingsTab: SettingsTab = .general
-    var signInUsesAPIKey = false
 
-    var historyView: HistoryView = .allRequests
+    var historyView: HistoryView = .allRequests {
+        didSet {
+            if historyView == .errors {
+                historyStatus = .errors
+            }
+        }
+    }
     var historyRange: DateRange = .last7Days
     var historyModel: String = "All models"
     var historyConversation: String = "All"
@@ -120,7 +118,6 @@ final class TallyStore {
     private var refreshTask: Task<Void, Never>?
     private var announcedDaily: BudgetLevel
     private var announcedMonthly: BudgetLevel
-    private var didPromptForNotifications = false
 
     init() {
         let defaults = UserDefaults.standard
@@ -135,6 +132,7 @@ final class TallyStore {
         unitsPerUSD = storedRate > 0 ? storedRate : 1
         #if DEBUG
         Format.checkCurrencies()
+        DayStart.checkBoundary()
         #endif
         dayStart = DayStart(rawValue: defaults.string(forKey: Key.dayStart) ?? "") ?? .utcMidnight
         appearance = AppearanceChoice(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
@@ -159,17 +157,18 @@ final class TallyStore {
         }
         gatewayURL = defaults.string(forKey: Key.gateway) ?? "https://gateway.example.com"
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
-        accountEmail = "jane.doe@example.com"
-        teamName = "Medical Writing"
-        tokenExpires = Ledger.shared.snapshot.addingTimeInterval(6 * 86_400)
-        let storedKey = KeychainStore.string(account: "apiKey") ?? "tally-sample-3f9a"
-        apiKey = storedKey
+        let storedKey = KeychainStore.string(account: "apiKey")
+        if storedKey == "tally-sample-3f9a" {
+            KeychainStore.remove(account: "apiKey")
+            apiKey = ""
+        } else {
+            apiKey = storedKey ?? ""
+        }
+        if KeychainStore.string(account: "session") == "sample-session" {
+            KeychainStore.remove(account: "session")
+        }
         announcedDaily = .ok
         announcedMonthly = .ok
-        if signedIn && KeychainStore.string(account: "apiKey") == nil {
-            KeychainStore.set(storedKey, account: "apiKey")
-            KeychainStore.set("sample-session", account: "session")
-        }
         announcedDaily = dailyLevel
         announcedMonthly = monthlyLevel
         #if DEBUG
@@ -202,7 +201,7 @@ final class TallyStore {
     }
 
     func quotaLevel(_ percent: Double) -> BudgetLevel {
-        level(for: percent, budget: 100)
+        level(spent: percent, budget: 100)
     }
 
     var menuLevel: BudgetLevel {
@@ -215,17 +214,15 @@ final class TallyStore {
     }
 
     var phase: SessionPhase {
-        if isLoading { return .loading }
         if !isSignedIn { return .signedOut }
-        if isOffline { return .offline }
         if requests(on: ledger.snapshot).isEmpty { return .empty }
         return .live
     }
 
     var todayFraction: Double { fraction(ledger.todaySpend, of: dailyBudget) }
     var monthFraction: Double { fraction(ledger.monthSpend, of: monthlyBudget) }
-    var dailyLevel: BudgetLevel { level(for: ledger.todaySpend, budget: dailyBudget) }
-    var monthlyLevel: BudgetLevel { level(for: ledger.monthSpend, ofBudget: monthlyBudget) }
+    var dailyLevel: BudgetLevel { level(spent: ledger.todaySpend, budget: dailyBudget) }
+    var monthlyLevel: BudgetLevel { level(spent: ledger.monthSpend, budget: monthlyBudget) }
 
     var isSnoozed: Bool {
         guard let snoozedUntil else { return false }
@@ -237,8 +234,8 @@ final class TallyStore {
     }
 
     var maskedAPIKey: String {
-        let suffix = apiKey.suffix(4)
-        return "••••••••••••\(suffix)"
+        guard apiKey.count >= 4 else { return "Not set" }
+        return "••••••••••••\(apiKey.suffix(4))"
     }
 
     var displayRate: Double {
@@ -266,56 +263,25 @@ final class TallyStore {
         return value
     }
 
-    func refresh() {
-        reloadQuotas()
-        guard gatewayEnabled, isSignedIn, !isLoading else { return }
-        isRefreshing = true
-        let monitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "tally.reachability")
-        monitor.pathUpdateHandler = { [weak self] path in
-            monitor.cancel()
-            let online = path.status == .satisfied
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.isRefreshing = false
-                self.lastUpdated = Date()
-                self.isOffline = !online
-            }
-        }
-        monitor.start(queue: queue)
-    }
-
-    func signIn(apiKey enteredKey: String?) {
-        isLoading = true
-        isOffline = false
-        if let enteredKey, !enteredKey.isEmpty {
+    func signIn(apiKey enteredKey: String?) -> Bool {
+        if let enteredKey {
+            let trimmed = enteredKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, KeychainStore.set(trimmed, account: "apiKey") else { return false }
+            apiKey = trimmed
             authMethod = .apiKey
-            apiKey = enteredKey
-            KeychainStore.set(enteredKey, account: "apiKey")
         } else {
             authMethod = .browser
-            if KeychainStore.string(account: "apiKey") == nil {
-                KeychainStore.set(apiKey, account: "apiKey")
-            }
         }
-        KeychainStore.set("sample-session", account: "session")
-        accountEmail = "jane.doe@example.com"
-        teamName = "Medical Writing"
-        tokenExpires = Date().addingTimeInterval(6 * 86_400)
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            isLoading = false
-            isSignedIn = true
-            layout = .compact
-            detailTab = .overview
-        }
+        isSignedIn = true
+        layout = .compact
+        detailTab = .overview
+        return true
     }
 
     func signOut() {
         isSignedIn = false
-        isOffline = false
-        isLoading = false
         layout = .compact
+        apiKey = ""
         KeychainStore.remove(account: "session")
         KeychainStore.remove(account: "apiKey")
     }
@@ -327,40 +293,43 @@ final class TallyStore {
         }
     }
 
-    func replaceAPIKey(_ value: String) {
+    @discardableResult
+    func replaceAPIKey(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, KeychainStore.set(trimmed, account: "apiKey") else { return false }
         apiKey = trimmed
-        KeychainStore.set(trimmed, account: "apiKey")
+        return true
     }
 
-    func modelTotals(for period: SpendPeriod) -> [ModelTotal] {
+    func modelTotals(for period: DateRange) -> [ModelTotal] {
         let totals: [ModelTotal]
         switch period {
         case .today:
             totals = ledger.todayModels
-        case .month:
+        case .thisMonth:
             totals = ledger.monthModels
-        case .sevenDays:
-            totals = aggregateModels(requests(in: .last7Days))
+        case .last7Days, .last30Days:
+            totals = UsageRollup.models(in: requests(in: period).filter { !$0.isError }).map {
+                ModelTotal(model: $0.model, requests: $0.requests, cost: $0.cost)
+            }
         }
         return sort(totals)
     }
 
-    func conversationTotals(for period: SpendPeriod) -> [ConversationTotal] {
+    func conversationTotals(for period: DateRange) -> [ConversationTotal] {
         switch period {
-        case .month:
+        case .thisMonth:
             return ledger.monthConversations.filter { matchesConversation($0.name) }
         case .today:
-            return aggregateConversations(requests(on: ledger.snapshot)).filter { matchesConversation($0.name) }
-        case .sevenDays:
-            return aggregateConversations(requests(in: .last7Days)).filter { matchesConversation($0.name) }
+            return conversationTotals(in: requests(on: ledger.snapshot))
+        case .last7Days, .last30Days:
+            return conversationTotals(in: requests(in: period))
         }
     }
 
     func filteredRequests() -> [UsageRequest] {
         requests(in: historyRange).filter { request in
-            if historyView == .errors || historyStatus == .errors, !request.isError { return false }
+            if historyStatus == .errors, !request.isError { return false }
             if historyStatus == .success, request.isError { return false }
             if historyModel != "All models", request.model.rawValue != historyModel { return false }
             if historyConversation != "All", request.conversation != historyConversation { return false }
@@ -378,8 +347,7 @@ final class TallyStore {
     }
 
     func limitEstimate() -> String? {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: ledger.snapshot)
+        let start = dayStart.boundary(containing: ledger.snapshot)
         let elapsed = ledger.snapshot.timeIntervalSince(start)
         guard elapsed > 60, ledger.todaySpend > 0, ledger.todaySpend < dailyBudget else { return nil }
         let rate = ledger.todaySpend / elapsed
@@ -415,47 +383,30 @@ final class TallyStore {
         }
     }
 
-    private func aggregateModels(_ rows: [UsageRequest]) -> [ModelTotal] {
-        AIModel.allCases.compactMap { model in
-            let matching = rows.filter { $0.model == model && !$0.isError }
-            let cost = matching.reduce(0) { $0 + $1.cost }
-            guard !matching.isEmpty else { return nil }
-            return ModelTotal(model: model, requests: matching.count, cost: cost)
+    private func conversationTotals(in rows: [UsageRequest]) -> [ConversationTotal] {
+        UsageRollup.conversations(in: rows.filter { !$0.isError }).map {
+            ConversationTotal(name: $0.name, requests: $0.requests, modelLabel: $0.modelLabel, cost: $0.cost)
         }
-    }
-
-    private func aggregateConversations(_ rows: [UsageRequest]) -> [ConversationTotal] {
-        let names = Set(rows.map(\.conversation)).filter { $0 != "—" }
-        return names.map { name in
-            let matching = rows.filter { $0.conversation == name && !$0.isError }
-            let models = Set(matching.map(\.model.rawValue))
-            let label = models.count == 1 ? (models.first ?? "mixed") : "mixed"
-            return ConversationTotal(
-                name: name,
-                requests: matching.count,
-                modelLabel: label,
-                cost: matching.reduce(0) { $0 + $1.cost }
-            )
-        }
-        .sorted { $0.cost > $1.cost }
+        .filter { matchesConversation($0.name) }
     }
 
     private func requests(on day: Date) -> [UsageRequest] {
-        let calendar = Calendar.current
-        return ledger.requests.filter { calendar.isDate($0.time, inSameDayAs: day) }
+        let start = dayStart.boundary(containing: day)
+        let end = dayStart.addingDays(1, to: start)
+        return ledger.requests.filter { $0.time >= start && $0.time < end }
     }
 
     private func rangeStart(_ range: DateRange) -> Date {
-        let calendar = Calendar.current
-        let day = calendar.startOfDay(for: ledger.snapshot)
+        let day = dayStart.boundary(containing: ledger.snapshot)
         switch range {
         case .today:
             return day
         case .last7Days:
-            return calendar.date(byAdding: .day, value: -6, to: day) ?? day
+            return dayStart.addingDays(-6, to: day)
         case .last30Days:
-            return calendar.date(byAdding: .day, value: -29, to: day) ?? day
+            return dayStart.addingDays(-29, to: day)
         case .thisMonth:
+            let calendar = Calendar.current
             return calendar.date(from: calendar.dateComponents([.year, .month], from: ledger.snapshot)) ?? day
         }
     }
@@ -465,18 +416,10 @@ final class TallyStore {
         return spent / budget
     }
 
-    private func level(for spent: Double, budget: Double, threshold: Double? = nil) -> BudgetLevel {
-        level(spent: spent, budget: budget, threshold: threshold ?? warningThreshold)
-    }
-
-    private func level(for spent: Double, ofBudget budget: Double) -> BudgetLevel {
-        level(spent: spent, budget: budget, threshold: warningThreshold)
-    }
-
-    private func level(spent: Double, budget: Double, threshold: Double) -> BudgetLevel {
+    private func level(spent: Double, budget: Double, threshold: Double? = nil) -> BudgetLevel {
         let fraction = fraction(spent, of: budget)
         if fraction >= 1 { return .over }
-        if fraction >= threshold { return .warning }
+        if fraction >= (threshold ?? warningThreshold) { return .warning }
         return .ok
     }
 
@@ -503,10 +446,6 @@ final class TallyStore {
             guard notifyAtWarning else { return }
         case .over:
             guard notifyWhenExceeded else { return }
-        }
-        if !didPromptForNotifications {
-            didPromptForNotifications = true
-            BudgetNotifications.requestAuthorization()
         }
         let percent = Int((fraction(spent, of: budget) * 100).rounded())
         let title: String
@@ -569,7 +508,7 @@ final class TallyStore {
 
     private var quotaTask: Task<Void, Never>?
 
-    private func reloadQuotas() {
+    func reloadQuotas() {
         let sources = quotaSources
         guard !sources.isEmpty else {
             quotas = [:]
@@ -601,7 +540,7 @@ final class TallyStore {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                self?.refresh()
+                self?.reloadQuotas()
             }
         }
     }
@@ -669,8 +608,6 @@ final class TallyStore {
 
 enum SessionPhase {
     case signedOut
-    case loading
     case live
-    case offline
     case empty
 }

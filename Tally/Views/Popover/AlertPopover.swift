@@ -47,27 +47,16 @@ struct AlertPopover: View {
     }
 
     private var todayCard: some View {
-        SpendCard {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    SectionLabel(text: "Today")
-                    Spacer()
-                    Text(Format.percent(store.todayFraction))
-                        .font(.caption.weight(.semibold))
-                        .monospacedDigit()
-                        .tallySecondary()
-                }
-                Text(store.money(store.ledger.todaySpend))
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
-                BudgetStatus(level: store.dailyLevel, period: "daily")
-                Text("of \(store.money(store.dailyBudget)) daily budget")
-                    .font(.subheadline)
-                    .tallySecondary()
-                BudgetBar(fraction: min(store.todayFraction, 1), tint: store.dailyLevel.fill(scheme))
-            }
-        }
+        PeriodSpendCard(
+            title: "Today",
+            amount: store.money(store.ledger.todaySpend),
+            percent: Format.percent(store.todayFraction),
+            level: store.dailyLevel,
+            period: "daily",
+            budgetLine: "of \(store.money(store.dailyBudget)) daily budget",
+            fraction: store.todayFraction,
+            tint: store.dailyLevel.fill(scheme)
+        )
     }
 
     private var monthCard: some View {

@@ -4,20 +4,26 @@ import Security
 enum KeychainStore {
     static let service = "com.nnayz.tally"
 
-    static func set(_ value: String, account: String) {
+    /// Saves a generic password for this device only, after the first unlock.
+    /// Returns false unless the keychain reports success.
+    static func set(_ value: String, account: String) -> Bool {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let update = [kSecValueData as String: data]
-        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if status == errSecItemNotFound {
-            var insert = query
-            insert[kSecValueData as String] = data
-            SecItemAdd(insert as CFDictionary, nil)
-        }
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updated == errSecSuccess { return true }
+        if updated != errSecItemNotFound { return false }
+        var insert = query
+        insert[kSecValueData as String] = data
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 
     static func string(account: String) -> String? {

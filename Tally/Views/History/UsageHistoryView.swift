@@ -165,7 +165,7 @@ struct UsageHistoryView: View {
                 Text(Format.requestTime(row.time)).monospacedDigit()
             }
             .width(min: 140)
-            TableColumn("Model", value: \.model) { row in
+            TableColumn("Model", value: \.model.rawValue) { row in
                 HStack(spacing: 6) {
                     ModelDot(color: row.model.color)
                     Text(row.model.rawValue)
@@ -269,37 +269,12 @@ struct UsageHistoryView: View {
         .font(.subheadline)
     }
 
-    private var modelAggregates: [ModelAggregate] {
-        let rows = searched(store.filteredRequests())
-        return AIModel.allCases.compactMap { model in
-            let matching = rows.filter { $0.model == model }
-            guard !matching.isEmpty else { return nil }
-            return ModelAggregate(
-                model: model,
-                requests: matching.count,
-                input: matching.reduce(0) { $0 + $1.input },
-                output: matching.reduce(0) { $0 + $1.output },
-                cost: matching.reduce(0) { $0 + $1.cost },
-                errors: matching.filter(\.isError).count
-            )
-        }
-        .sorted { $0.cost > $1.cost }
+    private var modelAggregates: [UsageRollup.ModelRow] {
+        UsageRollup.models(in: searched(store.filteredRequests()))
     }
 
-    private var conversationAggregates: [ConversationAggregate] {
-        let rows = searched(store.filteredRequests()).filter { $0.conversation != "—" }
-        let names = Set(rows.map(\.conversation))
-        return names.map { name in
-            let matching = rows.filter { $0.conversation == name }
-            return ConversationAggregate(
-                name: name,
-                requests: matching.count,
-                input: matching.reduce(0) { $0 + $1.input },
-                output: matching.reduce(0) { $0 + $1.output },
-                cost: matching.reduce(0) { $0 + $1.cost }
-            )
-        }
-        .sorted { $0.cost > $1.cost }
+    private var conversationAggregates: [UsageRollup.ConversationRow] {
+        UsageRollup.conversations(in: searched(store.filteredRequests()))
     }
 
     private func searched(_ rows: [UsageRequest]) -> [UsageRequest] {
@@ -368,21 +343,4 @@ private struct StatusPill: View {
     }
 }
 
-private struct ModelAggregate: Identifiable {
-    var model: AIModel
-    var requests: Int
-    var input: Int
-    var output: Int
-    var cost: Double
-    var errors: Int
-    var id: String { model.id }
-}
 
-private struct ConversationAggregate: Identifiable {
-    var name: String
-    var requests: Int
-    var input: Int
-    var output: Int
-    var cost: Double
-    var id: String { name }
-}

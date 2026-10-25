@@ -84,8 +84,8 @@ enum Format {
         "\(Int((fraction * 100).rounded()))%"
     }
 
-    static func clock(_ date: Date) -> String {
-        timestamp(date, format: "HH:mm")
+    static func clock(_ date: Date, seconds: Bool = false) -> String {
+        timestamp(date, format: seconds ? "HH:mm:ss" : "HH:mm")
     }
 
     static func dayMonth(_ date: Date) -> String {

@@ -26,6 +26,11 @@ struct DetailedPopover: View {
                         .font(.caption)
                         .tallySecondary()
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let loadNotice = store.loadNotice {
+                    Text(loadNotice)
+                        .font(.caption)
+                        .tallySecondary()
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 16)

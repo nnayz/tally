@@ -55,6 +55,7 @@ struct MenuBarLabel: View {
     private func figure(_ source: WidgetSource) -> String {
         switch source {
         case .gateway:
+            guard store.lastUpdated != nil else { return "—" }
             return store.money(store.ledger.todaySpend)
         default:
             guard let percent = store.quotas[source]?.percent else { return "—" }
@@ -63,7 +64,10 @@ struct MenuBarLabel: View {
     }
 
     private var meterFraction: Double? {
-        if store.gatewayEnabled { return store.todayFraction }
+        if store.gatewayEnabled {
+            guard store.lastUpdated != nil else { return nil }
+            return store.todayFraction
+        }
         guard store.quotaSources.count == 1, let percent = store.quotas[store.quotaSources[0]]?.percent else {
             return nil
         }

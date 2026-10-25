@@ -10,7 +10,7 @@ struct CompactPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             PopoverTitle {
                 HStack(spacing: 6) {
-                    Text("Updated \(Format.clock(store.lastUpdated))")
+                    Text(store.spendClock(stale: store.loadError != nil))
                         .font(.caption)
                         .tallySecondary()
                     Button(action: store.refresh) {
@@ -23,16 +23,14 @@ struct CompactPopover: View {
                     .accessibilityLabel("Refresh")
                 }
             }
-            if let loadError = store.loadError {
-                Text(loadError)
-                    .font(.caption)
-                    .tallySecondary()
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if let loadNotice = store.loadNotice {
+            if let loadNotice = store.loadNotice, store.loadError == nil {
                 Text(loadNotice)
                     .font(.caption)
                     .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if store.gatewayEnabled {
+                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport)
             }
 
             if store.gatewayEnabled {

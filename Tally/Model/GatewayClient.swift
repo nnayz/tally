@@ -18,8 +18,59 @@ enum GatewayVersion: String, CaseIterable, Identifiable {
 }
 
 enum GatewayClient {
-    struct Failure: Error {
+    struct Failure: Error, Equatable {
         var message: String
+        var action: String
+
+        static func http(_ status: Int) -> Failure {
+            switch status {
+            case 401:
+                return Failure(
+                    message: "The gateway rejected this API key.",
+                    action: "Paste the virtual key again."
+                )
+            case 403:
+                return Failure(
+                    message: "This key cannot read spend logs.",
+                    action: "Allow this key to read spend logs."
+                )
+            case 404:
+                return Failure(
+                    message: "The spend route was not found. The proxy may be hiding it.",
+                    action: "Expose the spend-log route. A proxy may be hiding it."
+                )
+            default:
+                return Failure(
+                    message: "The gateway returned HTTP \(status).",
+                    action: "Confirm the spend URL and that this key can read spend logs."
+                )
+            }
+        }
+
+        static let unreachable = Failure(
+            message: "Couldn’t reach the gateway.",
+            action: "Confirm the spend URL is reachable."
+        )
+        static let loginPage = Failure(
+            message: "The gateway returned a login page, not spend data.",
+            action: "Point the spend URL at the spend-log route, not the login page."
+        )
+        static let dailyTotals = Failure(
+            message: "This URL returned daily totals, not requests.",
+            action: "Point the spend URL at request rows. Daily totals cannot be listed as requests."
+        )
+        static let unsupported = Failure(
+            message: "This response is not a supported spend log.",
+            action: "Return request rows that include a request id."
+        )
+        static let invalidURL = Failure(
+            message: "Enter an https spend URL.",
+            action: "Enter an https spend URL."
+        )
+        static let sameDestination = Failure(
+            message: "The spend URL and the key page must be different.",
+            action: "Use a key page URL that is not the spend URL."
+        )
     }
 
     struct Read {
@@ -63,10 +114,10 @@ enum GatewayClient {
         guard var components = URLComponents(string: trimmed),
               components.scheme == "https",
               components.host?.isEmpty == false else {
-            return .failure(Failure(message: "Enter an https spend URL."))
+            return .failure(.invalidURL)
         }
         if sameDestination(trimmed, keyPageURL) {
-            return .failure(Failure(message: "The spend URL and the key page must be different."))
+            return .failure(.sameDestination)
         }
 
         let start = windowStart(now)
@@ -89,7 +140,7 @@ enum GatewayClient {
                 components.queryItems = nil
             }
             guard let url = components.url else {
-                return .failure(Failure(message: "Enter an https spend URL."))
+                return .failure(.invalidURL)
             }
             var request = URLRequest(url: url)
             request.timeoutInterval = 12
@@ -99,11 +150,11 @@ enum GatewayClient {
             case .data(let data):
                 switch classify(data) {
                 case .loginPage:
-                    return .failure(Failure(message: "The gateway returned a login page, not spend data."))
+                    return .failure(.loginPage)
                 case .dailyTotals:
-                    return .failure(Failure(message: "This URL returned daily totals, not requests."))
+                    return .failure(.dailyTotals)
                 case .unsupported:
-                    return .failure(Failure(message: "This response is not a supported spend log."))
+                    return .failure(.unsupported)
                 case .rows(let rows):
                     collected = rows
                     done = true
@@ -118,12 +169,10 @@ enum GatewayClient {
                         page += 1
                     }
                 }
-            case .unauthorized:
-                return .failure(Failure(message: "The gateway rejected this API key."))
-            case .forbidden:
-                return .failure(Failure(message: "This key cannot read spend logs."))
-            case .failed:
-                return .failure(Failure(message: "Couldn’t reach the gateway."))
+            case .status(let code):
+                return .failure(.http(code))
+            case .unreachable:
+                return .failure(.unreachable)
             }
         }
 
@@ -206,6 +255,70 @@ enum GatewayClient {
         assert(capped.requests.count == 1)
         assert(capped.requests[0].requestID == "new")
         assert(!capped.truncated)
+
+        assert(Failure.http(401).message == "The gateway rejected this API key.")
+        assert(Failure.http(403).message == "This key cannot read spend logs.")
+        assert(Failure.http(404).message == "The spend route was not found. The proxy may be hiding it.")
+        assert(Failure.http(502).message == "The gateway returned HTTP 502.")
+        assert(Failure.unreachable.message == "Couldn’t reach the gateway.")
+
+        guard case .rows(let emptyRows) = classify(Data("[]".utf8)) else {
+            assertionFailure("empty rows")
+            return
+        }
+        assert(emptyRows.isEmpty)
+        assert(finish(emptyRows, now: now, version: .v1_106_2).requests.isEmpty)
+
+        let secret = "sk-test-secret"
+        let prompt = "hidden prompt"
+        let emptyReport = CapabilityReport.make(
+            host: reportHost("https://user:\(secret)@gateway.example.com/spend/logs/v2?api_key=\(secret)"),
+            failure: nil,
+            empty: true,
+            checking: false,
+            synced: now,
+            now: now
+        )
+        assert(emptyReport.spend.contains("Available"))
+        assert(emptyReport.spend.contains("no requests"))
+        assert(!emptyReport.spend.localizedCaseInsensitiveContains("unavailable"))
+        assert(emptyReport.models == "Available")
+        assert(emptyReport.history == "Available")
+        assert(emptyReport.action == nil)
+        assert(!emptyReport.text.contains(secret))
+        assert(!emptyReport.text.contains(prompt))
+        assert(!emptyReport.text.contains("api_key"))
+        assert(emptyReport.text.contains("gateway.example.com"))
+        assert(emptyReport.text.contains("this key only"))
+
+        let denied = Failure.http(403)
+        let stale = CapabilityReport.make(
+            host: "gateway.example.com",
+            failure: denied,
+            empty: false,
+            checking: false,
+            synced: now,
+            now: now
+        )
+        assert(stale.spend == denied.message)
+        assert(stale.models == denied.message)
+        assert(stale.history == denied.message)
+        assert(stale.synchronization.contains(denied.message))
+        assert(stale.action == denied.action)
+        assert(!stale.text.contains(secret))
+        assert(!stale.text.contains(prompt))
+
+        let unread = CapabilityReport.make(
+            host: "gateway.example.com",
+            failure: .dailyTotals,
+            empty: false,
+            checking: false,
+            synced: nil,
+            now: now
+        )
+        assert(unread.history == Failure.dailyTotals.message)
+        assert(!unread.history.contains("Available"))
+        assert(unread.synchronization == "Not synchronized yet")
     }
     #endif
 
@@ -370,7 +483,23 @@ enum GatewayClient {
         )
     }
 
-    private static func windowStart(_ now: Date) -> Date {
+    static func reportHost(_ spendURL: String) -> String {
+        let trimmed = spendURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              let host = components.host,
+              !host.isEmpty else { return "unknown" }
+        if let port = components.port, port != 443 {
+            return "\(host):\(port)"
+        }
+        return host
+    }
+
+    static func dayStamp(_ date: Date) -> String {
+        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+    }
+
+    static func windowStart(_ now: Date) -> Date {
         let calendar = Calendar.current
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
         let thirtyDays = calendar.date(byAdding: .day, value: -30, to: now) ?? now
@@ -386,17 +515,76 @@ enum GatewayClient {
 
     private enum Fetch {
         case data(Data)
-        case unauthorized
-        case forbidden
-        case failed
+        case status(Int)
+        case unreachable
     }
 
     private static func send(_ request: URLRequest) async -> Fetch {
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return .failed }
-        if http.statusCode == 401 { return .unauthorized }
-        if http.statusCode == 403 { return .forbidden }
-        guard (200..<300).contains(http.statusCode) else { return .failed }
+              let http = response as? HTTPURLResponse else { return .unreachable }
+        guard (200..<300).contains(http.statusCode) else { return .status(http.statusCode) }
         return .data(data)
+    }
+}
+
+struct CapabilityReport: Equatable {
+    var host: String
+    var spend: String
+    var models: String
+    var history: String
+    var synchronization: String
+    var action: String?
+
+    var text: String {
+        var lines = [
+            "Host: \(host)",
+            "Scope: this key only",
+            "Spend and tokens: \(spend)",
+            "Models: \(models)",
+            "Request history: \(history)",
+            "Last synchronization: \(synchronization)",
+        ]
+        if let action {
+            lines.append("Operator: \(action)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func make(
+        host: String,
+        failure: GatewayClient.Failure?,
+        empty: Bool,
+        checking: Bool,
+        synced: Date?,
+        now: Date
+    ) -> CapabilityReport {
+        let sentence: String
+        if let failure {
+            sentence = failure.message
+        } else if synced == nil {
+            sentence = checking ? "Checking the gateway." : "Not synchronized yet"
+        } else if empty {
+            sentence = "Available, this key only, no requests in this window."
+        } else {
+            let start = GatewayClient.dayStamp(GatewayClient.windowStart(now))
+            sentence = "Available, this key only, since \(start)."
+        }
+        let waiting = failure != nil || synced == nil
+        let synchronization: String
+        if let failure, let synced {
+            synchronization = "\(Format.clock(synced)), then \(failure.message)"
+        } else if let synced {
+            synchronization = Format.clock(synced)
+        } else {
+            synchronization = "Not synchronized yet"
+        }
+        return CapabilityReport(
+            host: host,
+            spend: sentence,
+            models: waiting ? sentence : "Available",
+            history: waiting ? sentence : "Available",
+            synchronization: synchronization,
+            action: failure?.action
+        )
     }
 }

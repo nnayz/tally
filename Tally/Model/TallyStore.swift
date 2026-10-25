@@ -9,6 +9,7 @@ final class TallyStore {
     var ledger = Ledger(requests: [], now: Date(), dayStart: .utcMidnight)
     var isLoadingUsage = false
     var loadError: String?
+    var loadFailure: GatewayClient.Failure?
     var loadNotice: String?
     private var loadGeneration = 0
     private var seededLevels = false
@@ -16,7 +17,7 @@ final class TallyStore {
     var isSignedIn: Bool {
         didSet { persist() }
     }
-    var lastUpdated: Date
+    var lastUpdated: Date?
 
     var launchAtLogin: Bool {
         didSet { persistLaunchAtLogin() }
@@ -177,7 +178,6 @@ final class TallyStore {
         let defaults = UserDefaults.standard
         let signedIn = defaults.object(forKey: Key.signedIn) as? Bool ?? false
         isSignedIn = signedIn
-        lastUpdated = Date()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         menuBarStyle = MenuBarStyle(rawValue: defaults.string(forKey: Key.menuBar) ?? "") ?? .spend
         refreshSeconds = defaults.object(forKey: Key.refresh) as? Int ?? 60
@@ -370,6 +370,7 @@ final class TallyStore {
             apiKey = ""
             KeychainStore.remove(account: "apiKey")
             loadError = nil
+            loadFailure = nil
             return error
         }
         isSignedIn = true
@@ -383,7 +384,9 @@ final class TallyStore {
         layout = .compact
         apiKey = ""
         loadError = nil
+        loadFailure = nil
         loadNotice = nil
+        lastUpdated = nil
         isLoadingUsage = false
         loadGeneration += 1
         ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
@@ -651,7 +654,6 @@ final class TallyStore {
                 self.quotas[source] = reading
             }
             self.quotas = self.quotas.filter { sources.contains($0.key) }
-            self.lastUpdated = Date()
         }
     }
 
@@ -683,6 +685,7 @@ final class TallyStore {
             ledger = Ledger(requests: read.requests, now: Date(), dayStart: dayStart)
             lastUpdated = Date()
             loadError = nil
+            loadFailure = nil
             loadNotice = read.truncated ? GatewayClient.truncationNotice : nil
             if seededLevels {
                 considerNotifications()
@@ -694,9 +697,35 @@ final class TallyStore {
             return nil
         case .failure(let error):
             loadError = error.message
+            loadFailure = error
             loadNotice = nil
             return error.message
         }
+    }
+
+    var capabilityReport: CapabilityReport {
+        let now = Date()
+        return CapabilityReport.make(
+            host: GatewayClient.reportHost(spendURL),
+            failure: loadFailure,
+            empty: lastUpdated != nil && ledger.requests.isEmpty,
+            checking: isLoadingUsage,
+            synced: lastUpdated,
+            now: now
+        )
+    }
+
+    func copyCapabilityReport() {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(capabilityReport.text, forType: .string)
+    }
+
+    func spendClock(stale: Bool, livePrefix: String = "Updated") -> String {
+        guard let lastUpdated else { return "Not synchronized yet" }
+        let clock = Format.clock(lastUpdated)
+        if stale { return "Stale · \(clock)" }
+        return "\(livePrefix) \(clock)"
     }
 
     private func restartRefreshLoop() {

@@ -69,7 +69,7 @@ struct UsageHistoryView: View {
                         Text(model.id).tag(model.id)
                     }
                 }
-                filterMenu("Conversation", selection: $store.historyConversation) {
+                filterMenu("Session", selection: $store.historyConversation) {
                     Text("All").tag("All")
                     ForEach(store.knownConversations, id: \.self) { name in
                         Text(name).tag(name)
@@ -172,7 +172,7 @@ struct UsageHistoryView: View {
                 }
             }
             .width(min: 130)
-            TableColumn("Conversation", value: \.conversation) { row in
+            TableColumn("Session", value: \.conversation) { row in
                 Text(row.conversation)
                     .lineLimit(1)
             }
@@ -231,7 +231,7 @@ struct UsageHistoryView: View {
 
     private var conversationTable: some View {
         Table(conversationAggregates) {
-            TableColumn("Conversation") { row in
+            TableColumn("Session") { row in
                 Text(row.name)
             }
             TableColumn("Requests") { row in

@@ -153,9 +153,21 @@ final class TallyStore {
     var profileSource: String {
         didSet { persist() }
     }
+    var profileHost: String {
+        didSet { persist() }
+    }
+    var hostedProfileURL: String {
+        didSet { persist() }
+    }
+    var setupLinkError: String?
+    var setupFailure: GatewayClient.Failure?
+    var isLoadingSetup = false
+    private var setupReportHost: String?
+    private var setupGeneration = 0
     var approvedHostKey: String {
         didSet { persist() }
     }
+    static let localProfileHost = "This Mac"
     private var applyingProfile = false
     var authMethod: AuthMethod {
         didSet { persist() }
@@ -173,6 +185,13 @@ final class TallyStore {
     var keyApproved: Bool {
         let key = GatewayClient.hostKey(of: spendURL)
         return !key.isEmpty && key == approvedHostKey
+    }
+
+    var displayedProfileHost: String {
+        if setupFailure != nil, let setupReportHost, !setupReportHost.isEmpty {
+            return setupReportHost
+        }
+        return profileHost.isEmpty ? Self.localProfileHost : profileHost
     }
 
     var spendHostLabel: String {
@@ -277,6 +296,8 @@ final class TallyStore {
         profileWindow = defaults.string(forKey: Key.profileWindow) ?? ""
         profileFreshness = defaults.string(forKey: Key.profileFreshness) ?? ""
         profileSource = defaults.string(forKey: Key.profileSource) ?? "Entered on this Mac"
+        profileHost = defaults.string(forKey: Key.profileHost) ?? Self.localProfileHost
+        hostedProfileURL = defaults.string(forKey: Key.hostedProfileURL) ?? ""
         approvedHostKey = defaults.string(forKey: Key.approvedHost) ?? ""
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
         let storedKey = KeychainStore.string(account: "apiKey")
@@ -458,6 +479,11 @@ final class TallyStore {
         loadNotice = nil
         lastUpdated = nil
         approvedHostKey = ""
+        setupFailure = nil
+        setupLinkError = nil
+        setupReportHost = nil
+        isLoadingSetup = false
+        setupGeneration += 1
         isLoadingUsage = false
         loadGeneration += 1
         ledger = Ledger(requests: [], now: Date(), dayStart: dayStart)
@@ -770,6 +796,9 @@ final class TallyStore {
             lastUpdated = Date()
             loadError = nil
             loadFailure = nil
+            setupFailure = nil
+            setupLinkError = nil
+            setupReportHost = nil
             loadNotice = read.truncated ? GatewayClient.truncationNotice : nil
             if seededLevels {
                 considerNotifications()
@@ -788,21 +817,29 @@ final class TallyStore {
     }
 
     var capabilityReport: CapabilityReport {
-        let now = Date()
-        return CapabilityReport.make(
-            host: GatewayClient.reportHost(spendURL),
-            failure: loadFailure,
-            empty: lastUpdated != nil && ledger.requests.isEmpty,
-            checking: isLoadingUsage,
-            synced: lastUpdated,
-            now: now
-        )
+        report(failure: loadFailure, profileHost: profileHost)
     }
 
     func copyCapabilityReport() {
+        let failure = setupFailure ?? loadFailure
+        let host = setupFailure != nil ? (setupReportHost ?? profileHost) : profileHost
         let board = NSPasteboard.general
         board.clearContents()
-        board.setString(capabilityReport.text, forType: .string)
+        board.setString(report(failure: failure, profileHost: host).text, forType: .string)
+    }
+
+    private func report(failure: GatewayClient.Failure?, profileHost host: String) -> CapabilityReport {
+        let shown = host.isEmpty ? Self.localProfileHost : host
+        return CapabilityReport.make(
+            host: GatewayClient.reportHost(spendURL),
+            profileHost: shown,
+            declaredScope: scopeTitle,
+            failure: failure,
+            empty: lastUpdated != nil && ledger.requests.isEmpty,
+            checking: isLoadingUsage,
+            synced: lastUpdated,
+            now: Date()
+        )
     }
 
     func approveSpendHost() async -> String? {
@@ -833,9 +870,60 @@ final class TallyStore {
             ) {
                 return failure.message
             }
-            apply(profile, source: url.lastPathComponent)
+            apply(profile, source: url.lastPathComponent, profileHost: Self.localProfileHost)
             return nil
         }
+    }
+
+    func openSetupLink(_ url: URL) {
+        setupGeneration += 1
+        let generation = setupGeneration
+        guard let profileURL = SetupLink.profileURL(from: url) else {
+            isLoadingSetup = false
+            noteSetupFailure(GatewayClient.Failure(
+                message: "This setup link does not point at an https profile.",
+                action: "Copy the setup link again from Tally."
+            ), host: nil)
+            return
+        }
+        let host = GatewayClient.reportHost(profileURL.absoluteString)
+        isLoadingSetup = true
+        setupLinkError = nil
+        Task {
+            let result = await GatewayClient.downloadProfile(from: profileURL.absoluteString)
+            guard generation == setupGeneration else { return }
+            isLoadingSetup = false
+            switch result {
+            case .failure(let failure):
+                noteSetupFailure(failure, host: host)
+            case .success(let profile):
+                setupFailure = nil
+                setupLinkError = nil
+                setupReportHost = nil
+                apply(profile, source: host, profileHost: host)
+            }
+        }
+    }
+
+    func copySetupLink() -> String? {
+        switch SetupLink.make(hostedURL: hostedProfileURL) {
+        case .failure(let failure):
+            return failure.message
+        case .success(let link):
+            if !apiKey.isEmpty, link.contains(apiKey) {
+                return "The setup link contained the API key and was not copied."
+            }
+            let board = NSPasteboard.general
+            board.clearContents()
+            board.setString(link, forType: .string)
+            return nil
+        }
+    }
+
+    private func noteSetupFailure(_ failure: GatewayClient.Failure, host: String?) {
+        setupFailure = failure
+        setupLinkError = failure.message
+        setupReportHost = host
     }
 
     func exportProfile(to url: URL) -> String? {
@@ -879,7 +967,7 @@ final class TallyStore {
         )
     }
 
-    private func apply(_ profile: ConnectionProfile, source: String) {
+    private func apply(_ profile: ConnectionProfile, source: String, profileHost host: String) {
         applyingProfile = true
         organization = profile.organization
         profileScope = profile.scope
@@ -888,6 +976,7 @@ final class TallyStore {
         profileWindow = profile.window
         profileFreshness = profile.freshness
         profileSource = source
+        profileHost = host
         if let version = GatewayVersion(rawValue: profile.adapter) {
             gatewayVersion = version
         }
@@ -907,8 +996,13 @@ final class TallyStore {
     }
 
     private func noteManualEdit() {
-        guard ready, !applyingProfile, profileSource != "Entered on this Mac" else { return }
-        profileSource = "Entered on this Mac"
+        guard ready, !applyingProfile else { return }
+        if profileSource != "Entered on this Mac" {
+            profileSource = "Entered on this Mac"
+        }
+        if profileHost != Self.localProfileHost {
+            profileHost = Self.localProfileHost
+        }
     }
 
     func spendClock(stale: Bool, livePrefix: String = "Updated") -> String {
@@ -973,6 +1067,8 @@ final class TallyStore {
         defaults.set(profileWindow, forKey: Key.profileWindow)
         defaults.set(profileFreshness, forKey: Key.profileFreshness)
         defaults.set(profileSource, forKey: Key.profileSource)
+        defaults.set(profileHost, forKey: Key.profileHost)
+        defaults.set(hostedProfileURL, forKey: Key.hostedProfileURL)
         defaults.set(approvedHostKey, forKey: Key.approvedHost)
         defaults.set(authMethod.rawValue, forKey: Key.auth)
         defaults.set(enabledSourceIDs, forKey: Key.sources)
@@ -1007,6 +1103,8 @@ final class TallyStore {
         static let profileWindow = "profileWindow"
         static let profileFreshness = "profileFreshness"
         static let profileSource = "profileSource"
+        static let profileHost = "profileHost"
+        static let hostedProfileURL = "hostedProfileURL"
         static let approvedHost = "approvedSpendHost"
         static let auth = "authMethod"
         static let sources = "enabledSources"

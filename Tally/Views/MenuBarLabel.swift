@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuBarLabel: View {
     @Bindable var store: TallyStore
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let level = store.menuLevel
@@ -41,6 +42,14 @@ struct MenuBarLabel: View {
         }
         .fixedSize()
         .accessibilityLabel(accessibilityText)
+        .onAppear {
+            SetupLinks.install { url in
+                store.openSetupLink(url)
+                NSApp.activate()
+                openWindow(id: TallyWindow.connect)
+            }
+        }
+        .onOpenURL { SetupLinks.receive($0) }
     }
 
     private var displayedSources: [WidgetSource] {

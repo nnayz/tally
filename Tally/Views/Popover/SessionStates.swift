@@ -65,6 +65,25 @@ struct SignInView: View {
                     .textFieldStyle(.roundedBorder)
                 ProfileSummary(store: store)
                     .padding(.top, 8)
+                if store.isLoadingSetup {
+                    Text("Downloading the profile…")
+                        .font(.caption)
+                        .tallySecondary()
+                        .padding(.top, 8)
+                }
+                if let setupLinkError = store.setupLinkError {
+                    Text(setupLinkError)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
+                if store.setupFailure != nil {
+                    Button("Copy report", action: store.copyCapabilityReport)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(.top, 4)
+                }
             }
             .padding(.top, 18)
 
@@ -262,6 +281,7 @@ struct ProfileSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Source: \(store.profileSource)")
+            Text("Profile host: \(store.displayedProfileHost)")
             Text(store.organization.isEmpty ? "Organization not set" : store.organization)
             Text("Spend host: \(store.spendHostLabel)")
             Text("Key page: \(store.keyPageHostLabel)")
@@ -272,6 +292,53 @@ struct ProfileSummary: View {
         .tallySecondary()
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ConnectView: View {
+    @Bindable var store: TallyStore
+
+    var body: some View {
+        Group {
+            if store.isSignedIn {
+                signedIn
+            } else {
+                SignInView(store: store)
+            }
+        }
+        .onAppear { NSApp.activate() }
+    }
+
+    private var signedIn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Connect to gateway")
+                .font(.headline)
+            ProfileSummary(store: store)
+            if store.isLoadingSetup {
+                Text("Downloading the profile…")
+                    .font(.caption)
+                    .tallySecondary()
+            }
+            if let setupLinkError = store.setupLinkError {
+                Text(setupLinkError)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !store.keyApproved {
+                Button("Send the saved key to this host") {
+                    Task { _ = await store.approveSpendHost() }
+                }
+                .buttonStyle(.borderedProminent)
+            } else if store.setupLinkError == nil && !store.isLoadingSetup {
+                Text("This Mac already has a key for this spend host.")
+                    .font(.caption)
+                    .tallySecondary()
+            }
+            Button("Copy report", action: store.copyCapabilityReport)
+                .buttonStyle(.bordered)
+        }
+        .padding(16)
+        .frame(width: 360)
     }
 }
 

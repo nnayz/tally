@@ -57,6 +57,47 @@ struct SpendCard<Content: View>: View {
     }
 }
 
+struct PeriodSpendCard: View {
+    var title: String
+    var amount: String
+    var percent: String
+    var level: BudgetLevel
+    var period: String
+    var budgetLine: String
+    var fraction: Double
+    var tint: Color
+    var projection: String? = nil
+
+    var body: some View {
+        SpendCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    SectionLabel(text: title)
+                    Spacer()
+                    Text(percent)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .tallySecondary()
+                }
+                Text(amount)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                BudgetStatus(level: level, period: period)
+                Text(budgetLine)
+                    .font(.subheadline)
+                    .tallySecondary()
+                BudgetBar(fraction: fraction, tint: tint)
+                if let projection {
+                    Text(projection)
+                        .font(.caption)
+                        .tallySecondary()
+                }
+            }
+        }
+    }
+}
+
 struct SectionLabel: View {
     var text: String
 
@@ -126,14 +167,9 @@ struct GearButton: View {
     }
 }
 
-struct PopoverTitle: View {
+struct PopoverTitle<Trailing: View>: View {
     var title: String = "Tally"
-    var trailing: AnyView
-
-    init(title: String = "Tally", @ViewBuilder trailing: () -> some View) {
-        self.title = title
-        self.trailing = AnyView(trailing())
-    }
+    @ViewBuilder var trailing: Trailing
 
     var body: some View {
         HStack(alignment: .center) {
@@ -182,13 +218,13 @@ struct BudgetBanner: View {
 }
 
 struct PeriodChips: View {
-    @Binding var selection: SpendPeriod
+    @Binding var selection: DateRange
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(SpendPeriod.allCases) { period in
+            ForEach(DateRange.chips) { period in
                 let selected = selection == period
-                Button(period.title) { selection = period }
+                Button(period.chipTitle) { selection = period }
                     .buttonStyle(.plain)
                     .font(.caption)
                     .padding(.horizontal, 8)
@@ -204,11 +240,5 @@ struct PeriodChips: View {
             }
             Spacer(minLength: 0)
         }
-    }
-}
-
-enum AppWindows {
-    static func activate() {
-        NSApp.activate()
     }
 }

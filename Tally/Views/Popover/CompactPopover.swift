@@ -13,7 +13,7 @@ struct CompactPopover: View {
                     Text("Updated \(Format.clock(store.lastUpdated))")
                         .font(.caption)
                         .tallySecondary()
-                    Button(action: store.refresh) {
+                    Button(action: store.reloadQuotas) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11, weight: .medium))
                             .frame(width: 22, height: 22)
@@ -59,7 +59,7 @@ struct CompactPopover: View {
                 Button("Open Dashboard", action: openHistory)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                Button("Refresh", action: store.refresh)
+                Button("Refresh", action: store.reloadQuotas)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 Spacer(minLength: 0)
@@ -71,54 +71,30 @@ struct CompactPopover: View {
     }
 
     private var todayCard: some View {
-        SpendCard {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    SectionLabel(text: "Today")
-                    Spacer()
-                    Text(Format.percent(store.todayFraction))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .tallySecondary()
-                }
-                Text(store.money(store.ledger.todaySpend))
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
-                BudgetStatus(level: store.dailyLevel, period: "daily")
-                Text("of \(store.money(store.dailyBudget)) daily budget")
-                    .font(.subheadline)
-                    .tallySecondary()
-                BudgetBar(fraction: store.todayFraction, tint: store.dailyLevel.fill(scheme))
-            }
-        }
+        PeriodSpendCard(
+            title: "Today",
+            amount: store.money(store.ledger.todaySpend),
+            percent: Format.percent(store.todayFraction),
+            level: store.dailyLevel,
+            period: "daily",
+            budgetLine: "of \(store.money(store.dailyBudget)) daily budget",
+            fraction: store.todayFraction,
+            tint: store.dailyLevel.fill(scheme)
+        )
     }
 
     private var monthCard: some View {
-        SpendCard {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    SectionLabel(text: "This month")
-                    Spacer()
-                    Text(Format.percent(store.monthFraction))
-                        .font(.caption)
-                        .monospacedDigit()
-                        .tallySecondary()
-                }
-                Text(store.money(store.ledger.monthSpend))
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
-                BudgetStatus(level: store.monthlyLevel, period: "monthly")
-                Text("of \(store.money(store.monthlyBudget)) monthly budget")
-                    .font(.subheadline)
-                    .tallySecondary()
-                BudgetBar(fraction: store.monthFraction, tint: store.monthlyLevel.fill(scheme))
-                Text("Projected \(store.moneyCompact(store.ledger.projectedMonthEnd)) by \(Format.dayMonth(store.ledger.projectionDate))")
-                    .font(.caption)
-                    .tallySecondary()
-            }
-        }
+        PeriodSpendCard(
+            title: "This month",
+            amount: store.money(store.ledger.monthSpend),
+            percent: Format.percent(store.monthFraction),
+            level: store.monthlyLevel,
+            period: "monthly",
+            budgetLine: "of \(store.money(store.monthlyBudget)) monthly budget",
+            fraction: store.monthFraction,
+            tint: store.monthlyLevel.fill(scheme),
+            projection: "Projected \(store.moneyCompact(store.ledger.projectedMonthEnd)) by \(Format.dayMonth(store.ledger.projectionDate))"
+        )
     }
 
     private func compactModel(_ total: ModelTotal) -> some View {

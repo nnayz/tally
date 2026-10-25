@@ -224,7 +224,7 @@ private struct ModelsTab: View {
                 stacked(totals, total: sum)
                 Text("\(store.money(sum)) total · ^[\(totals.count) model](inflect: true)")
                     .font(.subheadline)
-                Text("Stacked bar = share of \(store.modelPeriod == .month ? "monthly" : "period") spend")
+                Text("Stacked bar = share of \(store.modelPeriod == .thisMonth ? "monthly" : "period") spend")
                     .font(.caption)
                     .tallySecondary()
             }
@@ -243,7 +243,7 @@ private struct ModelsTab: View {
             Spacer()
             Button("Compare models ›") {
                 store.historyView = .byModel
-                store.historyRange = store.modelPeriod == .today ? .today : (store.modelPeriod == .sevenDays ? .last7Days : .thisMonth)
+                store.historyRange = store.modelPeriod
                 store.historyConversation = "All"
                 store.historyModel = "All models"
                 openHistory()
@@ -260,8 +260,9 @@ private struct ModelsTab: View {
     private var periodLabel: String {
         switch store.modelPeriod {
         case .today: "Today"
-        case .sevenDays: "7 days"
-        case .month: store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
+        case .last7Days: "7 days"
+        case .last30Days: "30 days"
+        case .thisMonth: store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
         }
     }
 
@@ -435,7 +436,7 @@ private struct ConversationsTab: View {
                 ForEach(rows) { row in
                     Button {
                         store.historyConversation = row.name == "Untagged requests" ? "Untagged" : row.name
-                        store.historyRange = range
+                        store.historyRange = store.conversationPeriod
                         store.historyView = .allRequests
                         store.historyStatus = .all
                         openHistory()
@@ -455,18 +456,11 @@ private struct ConversationsTab: View {
         let period: String
         switch store.conversationPeriod {
         case .today: period = "Today"
-        case .sevenDays: period = "7 days"
-        case .month: period = store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
+        case .last7Days: period = "7 days"
+        case .last30Days: period = "30 days"
+        case .thisMonth: period = store.ledger.snapshot.formatted(.dateTime.month(.abbreviated))
         }
         return "Most expensive · \(period)"
-    }
-
-    private var range: DateRange {
-        switch store.conversationPeriod {
-        case .today: .today
-        case .sevenDays: .last7Days
-        case .month: .thisMonth
-        }
     }
 
     private func conversationRow(_ row: ConversationTotal, maxCost: Double) -> some View {
@@ -544,7 +538,7 @@ private struct RequestsTab: View {
                 Text(row.model.rawValue)
                     .font(.subheadline.weight(.medium))
                 Spacer()
-                Text(Format.clock(row.time) + ":" + seconds(row.time))
+                Text(Format.clock(row.time, seconds: true))
                     .font(.caption)
                     .monospacedDigit()
                     .tallySecondary()
@@ -561,12 +555,5 @@ private struct RequestsTab: View {
                     .foregroundStyle(.primary)
             }
         }
-    }
-
-    private func seconds(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "ss"
-        return formatter.string(from: date)
     }
 }

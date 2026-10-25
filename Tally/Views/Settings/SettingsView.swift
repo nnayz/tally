@@ -51,6 +51,9 @@ private struct GeneralSettings: View {
                     Text("Every 60 seconds").tag(60)
                     Text("Every 5 minutes").tag(300)
                 }
+            } footer: {
+                Text("Reloads Codex, Claude, Grok, and Cursor quotas on this Mac.")
+                    .tallySecondary()
             }
             Section {
                 Picker("Currency", selection: $store.currencyCode) {
@@ -96,6 +99,7 @@ private struct GatewaySettings: View {
     @Environment(\.colorScheme) private var scheme
     @State private var replacingKey = false
     @State private var draftKey = ""
+    @State private var keySaveFailed = false
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -109,9 +113,9 @@ private struct GatewaySettings: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Connected")
                                 .font(.headline)
-                            Text("\(store.accountEmail) · team: \(store.teamName)")
+                            Text(store.apiKey.count >= 4 ? "API key stored in Keychain" : "Signed in with the browser")
                                 .font(.subheadline)
-                            Text("Last sync \(Format.clock(store.lastUpdated)) · token expires in ^[\(daysUntilExpiry) day](inflect: true)")
+                            Text("Updated \(Format.clock(store.lastUpdated))")
                                 .font(.caption)
                                 .tallySecondary()
                         }
@@ -145,9 +149,13 @@ private struct GatewaySettings: View {
                         HStack {
                             SecureField("New API key", text: $draftKey)
                             Button("Save") {
-                                store.replaceAPIKey(draftKey)
-                                draftKey = ""
-                                replacingKey = false
+                                if store.replaceAPIKey(draftKey) {
+                                    draftKey = ""
+                                    replacingKey = false
+                                    keySaveFailed = false
+                                } else {
+                                    keySaveFailed = true
+                                }
                             }
                             .disabled(draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
@@ -160,6 +168,10 @@ private struct GatewaySettings: View {
                         }
                     }
                 }
+                if keySaveFailed {
+                    Text("Couldn’t save the API key to the Keychain.")
+                        .foregroundStyle(.primary)
+                }
                 LabeledContent("Open management portal") {
                     Button("Open ↗") {
                         if let url = URL(string: store.gatewayURL) {
@@ -168,16 +180,11 @@ private struct GatewaySettings: View {
                     }
                 }
             } footer: {
-                Text("Keys and tokens are stored in the macOS Keychain. Prompts and outputs are never downloaded — metadata only.")
+                Text("API keys are stored in the macOS Keychain. Prompts and outputs are never downloaded — metadata only.")
                     .tallySecondary()
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var daysUntilExpiry: Int {
-        let seconds = store.tokenExpires.timeIntervalSince(Date())
-        return max(Int((seconds / 86_400).rounded()), 0)
     }
 }
 

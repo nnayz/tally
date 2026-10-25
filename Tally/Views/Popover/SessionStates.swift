@@ -44,7 +44,7 @@ struct SignInView: View {
             }
             .padding(.top, 18)
 
-            if store.signInUsesAPIKey {
+            if store.authMethod == .apiKey {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("API key")
                         .font(.caption)
@@ -61,13 +61,15 @@ struct SignInView: View {
                 }
                 .padding(.top, 8)
                 Button("Continue") {
-                    let trimmed = apiKey.trimmingCharacters(in: .whitespaces)
+                    let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
                     if trimmed.isEmpty {
                         apiKeyError = "Enter an API key to continue."
                         apiKeyFocused = true
-                    } else {
+                    } else if store.signIn(apiKey: trimmed) {
                         apiKeyError = nil
-                        store.signIn(apiKey: trimmed)
+                    } else {
+                        apiKeyError = "Couldn’t save the API key to the Keychain."
+                        apiKeyFocused = true
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -76,7 +78,7 @@ struct SignInView: View {
                 .padding(.top, 8)
                 Button("Use browser sign-in") {
                     apiKeyError = nil
-                    store.signInUsesAPIKey = false
+                    store.authMethod = .browser
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -91,7 +93,7 @@ struct SignInView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 12)
                 Button("Use API key instead") {
-                    store.signInUsesAPIKey = true
+                    store.authMethod = .apiKey
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -99,102 +101,13 @@ struct SignInView: View {
                 .padding(.top, 8)
             }
 
-            Text("Credentials are stored in the macOS Keychain.")
+            Text("An API key is stored in the macOS Keychain.")
                 .font(.caption)
                 .tallySecondary()
                 .padding(.top, 14)
         }
         .padding(16)
         .frame(width: 320)
-    }
-}
-
-struct LoadingView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Tally")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-            }
-            skeletonCard
-            skeletonCard
-            VStack(spacing: 10) {
-                skeletonLine(width: 180)
-                skeletonLine(width: 220)
-                skeletonLine(width: 160)
-            }
-            .padding(.top, 4)
-            Spacer(minLength: 0)
-            Text("Fetching usage from gateway…")
-                .font(.caption)
-                .tallySecondary()
-                .frame(maxWidth: .infinity)
-        }
-        .padding(16)
-        .frame(width: 320, height: 360)
-    }
-
-    private var skeletonCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            skeletonLine(width: 70, height: 10)
-            skeletonLine(width: 130, height: 22)
-            Capsule().fill(Color.primary.opacity(0.08)).frame(height: 6)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func skeletonLine(width: CGFloat, height: CGFloat = 12) -> some View {
-        RoundedRectangle(cornerRadius: 4)
-            .fill(Color.primary.opacity(0.08))
-            .frame(width: width, height: height)
-    }
-}
-
-struct OfflineView: View {
-    @Bindable var store: TallyStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Tally")
-                .font(.system(size: 13, weight: .semibold))
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Can’t reach gateway")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Showing cached data from \(Format.clock(store.ledger.cachedAt)). Retrying on the next refresh.")
-                        .font(.caption)
-                        .tallySecondary()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Button("Retry", action: store.refresh)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
-            .padding(12)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-
-            cachedCard(title: "Today · cached", amount: store.ledger.cachedTodaySpend, budget: store.dailyBudget)
-            cachedCard(title: "This month · cached", amount: store.ledger.cachedMonthSpend, budget: store.monthlyBudget)
-        }
-        .padding(16)
-        .frame(width: 320)
-    }
-
-    private func cachedCard(title: String, amount: Double, budget: Double) -> some View {
-        SpendCard {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: title)
-                Text(store.money(amount))
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .monospacedDigit()
-                BudgetBar(fraction: budget > 0 ? amount / budget : 0)
-            }
-        }
     }
 }
 
@@ -220,7 +133,7 @@ struct EmptyUsageView: View {
                 .font(.subheadline)
                 .tallySecondary()
                 .multilineTextAlignment(.center)
-            Button("Refresh", action: store.refresh)
+            Button("Refresh", action: store.reloadQuotas)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             Spacer(minLength: 12)

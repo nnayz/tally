@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-enum AIModel: String, CaseIterable, Identifiable, Hashable, Comparable {
+enum AIModel: String, CaseIterable, Identifiable, Hashable {
     case claudeSonnet = "claude-sonnet"
     case gpt4o = "gpt-4o"
     case geminiPro = "gemini-pro"
@@ -36,10 +36,6 @@ enum AIModel: String, CaseIterable, Identifiable, Hashable, Comparable {
         case .gpt4oMini: Color(red: 0.000, green: 0.541, blue: 0.628)
         case .claudeHaiku: Color(red: 0.62, green: 0.36, blue: 0.95)
         }
-    }
-
-    static func < (lhs: AIModel, rhs: AIModel) -> Bool {
-        lhs.rawValue < rhs.rawValue
     }
 }
 
@@ -91,6 +87,61 @@ struct ConversationTotal: Identifiable, Hashable {
     var cost: Double
 
     var id: String { name }
+}
+
+enum UsageRollup {
+    struct ModelRow: Identifiable {
+        var model: AIModel
+        var requests: Int
+        var input: Int
+        var output: Int
+        var cost: Double
+        var errors: Int
+        var id: String { model.id }
+    }
+
+    struct ConversationRow: Identifiable {
+        var name: String
+        var requests: Int
+        var input: Int
+        var output: Int
+        var cost: Double
+        var models: Set<String>
+        var id: String { name }
+        var modelLabel: String { models.count == 1 ? (models.first ?? "mixed") : "mixed" }
+    }
+
+    static func models(in rows: [UsageRequest]) -> [ModelRow] {
+        AIModel.allCases.compactMap { model in
+            let matching = rows.filter { $0.model == model }
+            guard !matching.isEmpty else { return nil }
+            return ModelRow(
+                model: model,
+                requests: matching.count,
+                input: matching.reduce(0) { $0 + $1.input },
+                output: matching.reduce(0) { $0 + $1.output },
+                cost: matching.reduce(0) { $0 + $1.cost },
+                errors: matching.filter(\.isError).count
+            )
+        }
+        .sorted { $0.cost > $1.cost }
+    }
+
+    static func conversations(in rows: [UsageRequest]) -> [ConversationRow] {
+        let named = rows.filter { $0.conversation != "—" }
+        return Set(named.map(\.conversation)).map { name in
+            let matching = named.filter { $0.conversation == name }
+            return ConversationRow(
+                name: name,
+                requests: matching.count,
+                input: matching.reduce(0) { $0 + $1.input },
+                output: matching.reduce(0) { $0 + $1.output },
+                cost: matching.reduce(0) { $0 + $1.cost },
+                models: Set(matching.map(\.model.rawValue))
+            )
+        }
+        .sorted { $0.cost > $1.cost }
+    }
 }
 
 struct DailySpend: Identifiable, Hashable {
@@ -159,22 +210,6 @@ enum DetailTab: String, CaseIterable, Identifiable {
     }
 }
 
-enum SpendPeriod: String, CaseIterable, Identifiable {
-    case today
-    case sevenDays
-    case month
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .today: "Today"
-        case .sevenDays: "7 days"
-        case .month: "Month"
-        }
-    }
-}
-
 enum ModelSort: String, CaseIterable, Identifiable {
     case cost
     case requests
@@ -216,6 +251,17 @@ enum DateRange: String, CaseIterable, Identifiable {
     case thisMonth = "This month"
 
     var id: String { rawValue }
+
+    var chipTitle: String {
+        switch self {
+        case .today: "Today"
+        case .last7Days: "7 days"
+        case .last30Days: "30 days"
+        case .thisMonth: "Month"
+        }
+    }
+
+    static let chips: [DateRange] = [.today, .last7Days, .thisMonth]
 }
 
 enum StatusFilter: String, CaseIterable, Identifiable {
@@ -266,6 +312,53 @@ enum DayStart: String, CaseIterable, Identifiable {
         case .localMidnight: "Local midnight"
         }
     }
+
+    /// Start of the billing day that contains `date`.
+    func boundary(containing date: Date) -> Date {
+        if self == .localMidnight {
+            return Calendar.current.startOfDay(for: date)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let hour = switch self {
+        case .utcMorning: 6
+        case .utcNoon: 12
+        default: 0
+        }
+        var parts = calendar.dateComponents([.year, .month, .day], from: date)
+        parts.hour = hour
+        parts.minute = 0
+        parts.second = 0
+        guard var start = calendar.date(from: parts) else { return date }
+        if date < start {
+            start = calendar.date(byAdding: .day, value: -1, to: start) ?? start
+        }
+        return start
+    }
+
+    func addingDays(_ count: Int, to date: Date) -> Date {
+        if self == .localMidnight {
+            return Calendar.current.date(byAdding: .day, value: count, to: date) ?? date
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return calendar.date(byAdding: .day, value: count, to: date) ?? date
+    }
+
+    #if DEBUG
+    static func checkBoundary() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let early = calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 5))!
+        let before = DayStart.utcMorning.boundary(containing: early)
+        let beforeParts = calendar.dateComponents([.day, .hour], from: before)
+        assert(beforeParts.day == 23 && beforeParts.hour == 6)
+        let onHour = calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 6))!
+        let onBoundary = DayStart.utcMorning.boundary(containing: onHour)
+        let onParts = calendar.dateComponents([.day, .hour], from: onBoundary)
+        assert(onParts.day == 24 && onParts.hour == 6)
+    }
+    #endif
 }
 
 enum AuthMethod: String, CaseIterable, Identifiable {
@@ -301,9 +394,6 @@ struct Ledger {
     let todayRequestCount: Int
     let todayTokensIn: Int
     let todayTokensOut: Int
-    let cachedTodaySpend: Double
-    let cachedMonthSpend: Double
-    let cachedAt: Date
     let topDriver: CostDriver
     let monthModels: [ModelTotal]
     let todayModels: [ModelTotal]
@@ -334,9 +424,6 @@ struct Ledger {
         todayRequestCount = 1_284
         todayTokensIn = 3_900_000
         todayTokensOut = 612_000
-        cachedTodaySpend = 17.06
-        cachedMonthSpend = 411.44
-        cachedAt = Ledger.date(24, 16, 58, 0)
         topDriver = CostDriver(
             name: "CSR section 11 drafting",
             cost: 4.86,
@@ -370,7 +457,7 @@ struct Ledger {
             DailySpend(date: Ledger.date(11 + offset, 12, 0, 0), amount: amount)
         }
 
-        let built = Ledger.makeRequests(snapshot: snapshot)
+        let built = Ledger.pinnedRequests()
         requests = built.requests
         highlightedRequestID = built.highlight
     }
@@ -382,40 +469,8 @@ struct Ledger {
         return calendar.date(from: parts) ?? Date()
     }
 
-    private static func makeRequests(snapshot: Date) -> (requests: [UsageRequest], highlight: Int) {
-        let pinned = pinnedRows()
-        let todayFiller = synthesize(
-            count: 1_270,
-            errorCount: 7,
-            costMilli: 184_200 - pinned.reduce(0) { $0 + $1.costMilli },
-            input: 3_900_000 - pinned.reduce(0) { $0 + $1.input },
-            output: 612_000 - pinned.reduce(0) { $0 + $1.output },
-            start: date(24, 0, 5, 0),
-            end: date(24, 17, 28, 0),
-            seed: 24
-        )
-        let weekFiller = synthesize(
-            count: 7_628,
-            errorCount: 29,
-            costMilli: 1_100_200,
-            input: 23_500_000,
-            output: 3_488_000,
-            start: date(18, 0, 10, 0),
-            end: date(23, 23, 50, 0),
-            seed: 18
-        )
-        let monthFiller = synthesize(
-            count: 6_400,
-            errorCount: 44,
-            costMilli: 2_843_600,
-            input: 48_000_000,
-            output: 7_200_000,
-            start: date(1, 8, 0, 0),
-            end: date(17, 22, 0, 0),
-            seed: 1
-        )
-
-        let drafts = (pinned + todayFiller + weekFiller + monthFiller).sorted { $0.time > $1.time }
+    private static func pinnedRequests() -> (requests: [UsageRequest], highlight: Int) {
+        let drafts = pinnedRows().sorted { $0.time > $1.time }
         let requests = drafts.enumerated().map { index, draft in
             UsageRequest(
                 id: index + 1,
@@ -428,7 +483,7 @@ struct Ledger {
                 status: draft.status
             )
         }
-        let highlight = requests.first { $0.time == date(24, 17, 42, 40) }?.id ?? requests[0].id
+        let highlight = requests.first { $0.time == date(24, 17, 42, 40) }?.id ?? requests.first?.id ?? 1
         return (requests, highlight)
     }
 
@@ -474,106 +529,5 @@ struct Ledger {
             row(17, 30, 15, .gpt4o, "Translation DE→EN", 1020, 880, 114),
             row(17, 28, 59, .claudeSonnet, "Untagged", 2200, 400, 126),
         ]
-    }
-
-    private static func synthesize(
-        count: Int,
-        errorCount: Int,
-        costMilli: Int,
-        input: Int,
-        output: Int,
-        start: Date,
-        end: Date,
-        seed: UInt64
-    ) -> [Draft] {
-        var rng = LCG(state: seed)
-        var errorSlots = Set<Int>()
-        while errorSlots.count < errorCount {
-            errorSlots.insert(rng.int(count))
-        }
-        let span = end.timeIntervalSince(start)
-        var weights: [Int] = []
-        var drafts: [Draft] = []
-        drafts.reserveCapacity(count)
-        for index in 0..<count {
-            let isError = errorSlots.contains(index)
-            let weight = isError ? 0 : 40 + rng.int(160)
-            weights.append(weight)
-            drafts.append(Draft(
-                time: start.addingTimeInterval(span * rng.unit()),
-                model: pickModel(&rng),
-                conversation: isError ? "—" : pickConversation(&rng),
-                input: 0,
-                output: 0,
-                costMilli: 0,
-                status: isError ? 429 : 200
-            ))
-        }
-        let costs = distribute(total: costMilli, weights: weights)
-        let inputs = distribute(total: input, weights: weights)
-        let outputs = distribute(total: output, weights: weights)
-        for index in drafts.indices {
-            drafts[index].costMilli = costs[index]
-            drafts[index].input = inputs[index]
-            drafts[index].output = outputs[index]
-        }
-        return drafts
-    }
-
-    private static func distribute(total: Int, weights: [Int]) -> [Int] {
-        let weightSum = weights.reduce(0, +)
-        guard weightSum > 0, total > 0 else { return Array(repeating: 0, count: weights.count) }
-        var values = weights.map { total * $0 / weightSum }
-        var remainder = total - values.reduce(0, +)
-        var index = 0
-        while remainder > 0 {
-            if weights[index % weights.count] > 0 {
-                values[index % values.count] += 1
-                remainder -= 1
-            }
-            index += 1
-        }
-        return values
-    }
-
-    private static func pickModel(_ rng: inout LCG) -> AIModel {
-        let roll = rng.int(100)
-        switch roll {
-        case 0..<34: return .claudeSonnet
-        case 34..<62: return .gpt4o
-        case 62..<76: return .geminiPro
-        case 76..<92: return .gpt4oMini
-        default: return .claudeHaiku
-        }
-    }
-
-    private static func pickConversation(_ rng: inout LCG) -> String {
-        let names = conversations
-        let weights = [30, 18, 16, 10, 10, 8, 8]
-        let roll = rng.int(weights.reduce(0, +))
-        var cursor = 0
-        for (name, weight) in zip(names, weights) {
-            cursor += weight
-            if roll < cursor { return name }
-        }
-        return names[0]
-    }
-}
-
-private struct LCG {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state = state &* 6364136223846793005 &+ 1
-        return state
-    }
-
-    mutating func int(_ upper: Int) -> Int {
-        guard upper > 0 else { return 0 }
-        return Int(next() % UInt64(upper))
-    }
-
-    mutating func unit() -> Double {
-        Double(next() % 10_000) / 10_000
     }
 }

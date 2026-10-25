@@ -35,43 +35,58 @@ ensure_project() {
   xcodegen generate --spec "$ROOT/project.yml" --project "$ROOT"
 }
 
+# pid and ppid for processes whose command is this exact binary.
+app_processes() {
+  local bin="$1"
+  local pid ppid cmd
+  while read -r pid ppid cmd; do
+    [[ -n "${pid:-}" ]] || continue
+    case "$cmd" in
+      "$bin"|"$bin "*)
+        printf '%s %s\n' "$pid" "$ppid"
+        ;;
+    esac
+  done < <(ps -ax -o pid=,ppid=,command=)
+}
+
+# Re-read the command so a recycled pid is not signalled.
+command_still_matches() {
+  local pid="$1"
+  local bin="$2"
+  local cmd
+  cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  case "$cmd" in
+    "$bin"|"$bin "*) return 0 ;;
+  esac
+  return 1
+}
+
 # Quit Tally only when its executable is inside this exact bundle.
 quit_app() {
   local app="$1"
   local bin="$app/Contents/MacOS/Tally"
-  local pid cmd found attempt
+  local pid ppid found attempt
 
   found=0
-  while read -r pid cmd; do
+  while read -r pid ppid; do
     [[ -n "${pid:-}" ]] || continue
-    case "$cmd" in
-      "$bin"|"$bin "*)
-        kill "$pid" 2>/dev/null || true
-        found=1
-        ;;
-    esac
-  done < <(ps -ax -o pid=,command=)
+    kill "$pid" 2>/dev/null || true
+    found=1
+  done < <(app_processes "$bin")
 
   [[ "$found" -eq 1 ]] || return 0
 
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    found=0
-    while read -r pid cmd; do
-      [[ -n "${pid:-}" ]] || continue
-      case "$cmd" in
-        "$bin"|"$bin "*) found=1 ;;
-      esac
-    done < <(ps -ax -o pid=,command=)
-    [[ "$found" -eq 0 ]] && return 0
+    app_is_running "$bin" || return 0
     sleep 0.2
   done
 
-  while read -r pid cmd; do
+  while read -r pid ppid; do
     [[ -n "${pid:-}" ]] || continue
-    case "$cmd" in
-      "$bin"|"$bin "*) kill -9 "$pid" 2>/dev/null || true ;;
-    esac
-  done < <(ps -ax -o pid=,command=)
+    if command_still_matches "$pid" "$bin"; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done < <(app_processes "$bin")
 
   for attempt in 1 2 3 4 5; do
     app_is_running "$bin" || return 0
@@ -81,13 +96,10 @@ quit_app() {
 
 app_is_running() {
   local bin="$1"
-  local pid cmd
-  while read -r pid cmd; do
-    [[ -n "${pid:-}" ]] || continue
-    case "$cmd" in
-      "$bin"|"$bin "*) return 0 ;;
-    esac
-  done < <(ps -ax -o pid=,command=)
+  local pid ppid
+  while read -r pid ppid; do
+    [[ -n "${pid:-}" ]] && return 0
+  done < <(app_processes "$bin")
   return 1
 }
 
@@ -113,15 +125,10 @@ build_app() {
 
 app_is_detached() {
   local bin="$1"
-  local pid ppid cmd
-  while read -r pid ppid cmd; do
-    [[ -n "${pid:-}" ]] || continue
-    case "$cmd" in
-      "$bin"|"$bin "*)
-        [[ "$ppid" == "1" ]] && return 0
-        ;;
-    esac
-  done < <(ps -ax -o pid=,ppid=,command=)
+  local pid ppid
+  while read -r pid ppid; do
+    [[ "$ppid" == "1" ]] && return 0
+  done < <(app_processes "$bin")
   return 1
 }
 

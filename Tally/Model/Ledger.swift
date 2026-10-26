@@ -269,6 +269,8 @@ enum DateRange: String, CaseIterable, Identifiable {
     }
 
     static let chips: [DateRange] = [.today, .last7Days, .thisMonth]
+    /// Member keys only have today's and the month's model totals.
+    static let memberChips: [DateRange] = [.today, .thisMonth]
 }
 
 enum StatusFilter: String, CaseIterable, Identifiable {

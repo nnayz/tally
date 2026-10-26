@@ -160,23 +160,13 @@ struct EmptyUsageView: View {
                 .background(Circle().fill(Color.primary.opacity(0.06)))
             Text("No requests yet today")
                 .font(.headline)
-            Text("Usage appears here once requests pass through the gateway. Monthly spend so far: \(store.money(store.ledger.monthSpend)).")
+            Text("This month: \(store.money(store.ledger.monthSpend)).")
                 .font(.subheadline)
                 .tallySecondary()
-                .multilineTextAlignment(.center)
-            if let loadNotice = store.loadNotice, store.loadError == nil {
-                Text(loadNotice)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            }
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
             Button("Refresh", action: store.refresh)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             Spacer(minLength: 12)
-            Text("Budget: \(store.money(0)) of \(store.money(store.dailyBudget)) today")
-                .font(.caption)
-                .tallySecondary()
         }
         .padding(16)
         .frame(width: 320)
@@ -212,12 +202,26 @@ struct FailedUsageView: View {
             Text(store.loadError ?? "Couldn’t reach the gateway.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
-            if store.loadFailure != .unapproved {
+            if let action = store.loadFailure?.action {
+                Text(action)
+                    .font(.caption)
+                    .tallySecondary()
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if store.loadFailure == GatewayClient.Failure.unapproved {
+                Button("Allow this host") {
+                    Task { _ = await store.approveSpendHost() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
                 Button("Retry", action: store.reloadSpend)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
             }
+            Button("Copy report", action: store.copyCapabilityReport)
+                .buttonStyle(.bordered)
             Button("Sign out") {
                 store.signOut()
             }

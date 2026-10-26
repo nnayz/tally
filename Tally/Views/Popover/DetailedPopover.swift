@@ -9,7 +9,7 @@ struct DetailedPopover: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 PopoverTitle {
                     HStack(spacing: 6) {
                         if store.loadError == nil {
@@ -20,29 +20,23 @@ struct DetailedPopover: View {
                         Text(store.spendClock(stale: store.loadError != nil, livePrefix: "Live ·"))
                             .font(.caption)
                             .tallySecondary()
+                        if store.isMember {
+                            MemberBadge()
+                        }
+                        HeaderIconButton(systemName: "chevron.up", label: "Show less") {
+                            store.layout = .compact
+                        }
                         GearButton(action: openSettings)
                     }
                 }
-                if let loadNotice = store.loadNotice, store.loadError == nil {
-                    Text(loadNotice)
-                        .font(.caption)
-                        .tallySecondary()
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
+                PopoverNotice(store: store)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
             .padding(.bottom, 10)
 
-            Picker("Section", selection: $store.detailTab) {
-                ForEach(DetailTab.allCases) { tab in
-                    Text(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(.horizontal, 12)
+            DetailTabBar(selection: $store.detailTab, tabs: store.detailTabs)
+                .padding(.horizontal, 12)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -62,8 +56,10 @@ struct DetailedPopover: View {
 
             Divider()
             HStack {
-                Button("Open Dashboard…", action: openHistory)
-                    .buttonStyle(.plain)
+                if !store.isMember {
+                    Button("Open Usage History…", action: openHistory)
+                        .buttonStyle(.plain)
+                }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
                     .buttonStyle(.plain)
@@ -74,6 +70,11 @@ struct DetailedPopover: View {
             .padding(.vertical, 10)
         }
         .frame(width: 360, height: 580)
+        .onChange(of: store.isMember) { _, _ in
+            if !store.detailTabs.contains(store.detailTab) {
+                store.detailTab = .overview
+            }
+        }
     }
 }
 
@@ -88,15 +89,19 @@ private struct OverviewTab: View {
         }
         SubscriptionSection(store: store)
         HStack(spacing: 8) {
-            kpi("Today", amount: store.ledger.todaySpend, fraction: store.todayFraction, budget: store.dailyBudget, level: store.dailyLevel, period: "daily")
-            kpi("This month", amount: store.ledger.monthSpend, fraction: store.monthFraction, budget: store.monthlyBudget, level: store.monthlyLevel, period: "monthly")
+            kpi("Today", amount: store.ledger.todaySpend, fraction: store.todayFraction, budget: store.dailyBudget, level: store.dailyLevel)
+            kpi("This month", amount: store.ledger.monthSpend, fraction: store.monthFraction, budget: store.monthlyBudget, level: store.monthlyLevel)
         }
-        chartCard
-        statsCard
-        driverCard
+        if store.isMember {
+            memberModelsCard
+        } else {
+            chartCard
+            statsCard
+            driverCard
+        }
     }
 
-    private func kpi(_ title: String, amount: Double, fraction: Double, budget: Double, level: BudgetLevel, period: String) -> some View {
+    private func kpi(_ title: String, amount: Double, fraction: Double, budget: Double, level: BudgetLevel) -> some View {
         SpendCard {
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: title)
@@ -106,7 +111,6 @@ private struct OverviewTab: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                BudgetStatus(level: level, period: period)
                 BudgetBar(fraction: min(fraction, 1), tint: level.fill(scheme))
                 Text("\(Format.percent(fraction)) of \(store.moneyCompact(budget))")
                     .font(.caption)
@@ -116,10 +120,51 @@ private struct OverviewTab: View {
         }
     }
 
+    /// Member totals include model breakdowns, but no daily history or request rows.
+    @ViewBuilder
+    private var memberModelsCard: some View {
+        let rows = Array(store.ledger.todayModels.prefix(4))
+        if !rows.isEmpty {
+            SpendCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionLabel(text: "Today by model")
+                    ForEach(rows) { total in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                ModelDot(color: total.model.color)
+                                Text(total.model.qualifiedName)
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                Spacer(minLength: 8)
+                                Text(store.money(total.cost))
+                                    .font(.subheadline)
+                                    .monospacedDigit()
+                            }
+                            BudgetBar(
+                                fraction: total.cost / max(store.ledger.todaySpend, 0.01),
+                                tint: total.model.color,
+                                height: 3,
+                                label: "percent of today’s spend"
+                            )
+                            .padding(.leading, 16)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var chartCard: some View {
         SpendCard {
             VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "Daily spend · last 14 days")
+                HStack {
+                    SectionLabel(text: "Daily spend · this month")
+                    Spacer()
+                    Text("Budget \(store.moneyCompact(store.dailyBudget))")
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .tallySecondary()
+                }
                 Chart {
                     ForEach(store.ledger.dailySpend) { day in
                         BarMark(
@@ -129,14 +174,11 @@ private struct OverviewTab: View {
                         .foregroundStyle(barColor(day))
                         .cornerRadius(2)
                     }
-                    RuleMark(y: .value("Budget", store.dailyBudget))
-                        .foregroundStyle(.red)
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                        .annotation(position: .top, alignment: .trailing) {
-                            Text("Budget \(store.moneyCompact(store.dailyBudget))")
-                                .font(.caption2)
-                                .tallySecondary()
-                        }
+                    if store.dailyBudget > 0 {
+                        RuleMark(y: .value("Budget", store.dailyBudget))
+                            .foregroundStyle(.red.opacity(0.7))
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                    }
                 }
                 .chartYAxis(.hidden)
                 .chartLegend(.hidden)
@@ -225,7 +267,10 @@ private struct ModelsTab: View {
     var openHistory: () -> Void
 
     var body: some View {
-        PeriodChips(selection: $store.modelPeriod)
+        PeriodChips(
+            selection: $store.modelPeriod,
+            periods: store.isMember ? DateRange.memberChips : DateRange.chips
+        )
         let totals = store.modelTotals(for: store.modelPeriod)
         let shares = store.sharePercents(totals)
         let sum = totals.reduce(0) { $0 + $1.cost }
@@ -235,9 +280,6 @@ private struct ModelsTab: View {
                 stacked(totals, total: sum)
                 Text("\(store.money(sum)) total · ^[\(totals.count) model](inflect: true)")
                     .font(.subheadline)
-                Text("Stacked bar = share of \(store.modelPeriod == .thisMonth ? "monthly" : "period") spend")
-                    .font(.caption)
-                    .tallySecondary()
             }
         }
         HStack {
@@ -252,16 +294,18 @@ private struct ModelsTab: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             Spacer()
-            Button("Compare models ›") {
-                store.historyView = .byModel
-                store.historyRange = store.modelPeriod
-                store.historyConversation = "All"
-                store.historyModel = "All models"
-                openHistory()
+            if !store.isMember {
+                Button("Compare models ›") {
+                    store.historyView = .byModel
+                    store.historyRange = store.modelPeriod
+                    store.historyConversation = "All"
+                    store.historyModel = "All models"
+                    openHistory()
+                }
+                .buttonStyle(.plain)
+                .font(.subheadline)
+                .tallyAccent()
             }
-            .buttonStyle(.plain)
-            .font(.subheadline)
-            .tallyAccent()
         }
         SpendCard {
             ModelsTable(store: store, totals: totals, shares: shares)
@@ -526,7 +570,7 @@ private struct RequestsTab: View {
                         Divider().padding(.vertical, 6)
                     }
                 }
-                Button("View full history in window ›") {
+                Button("Open Usage History ›") {
                     store.historyView = .allRequests
                     store.historyRange = .last7Days
                     store.historyConversation = "All"

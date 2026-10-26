@@ -83,7 +83,9 @@ struct PeriodSpendCard: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundStyle(.primary)
                     .monospacedDigit()
-                BudgetStatus(level: level, period: period)
+                if level != .ok {
+                    BudgetStatus(level: level, period: period)
+                }
                 Text(budgetLine)
                     .font(.subheadline)
                     .tallySecondary()
@@ -152,18 +154,118 @@ struct ModelDot: View {
     }
 }
 
-struct GearButton: View {
+struct HeaderIconButton: View {
+    var systemName: String
+    var label: String
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "gearshape")
+            Image(systemName: systemName)
                 .font(.system(size: 11, weight: .medium))
                 .frame(width: 22, height: 22)
                 .overlay(Circle().stroke(Color.primary.opacity(0.16)))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Settings")
+        .accessibilityLabel(label)
+        .help(label)
+    }
+}
+
+struct GearButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        HeaderIconButton(systemName: "gearshape", label: "Settings", action: action)
+    }
+}
+
+/// A quiet badge for keys that report totals but cannot list requests.
+struct MemberBadge: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Text("Member")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(TallyPalette.secondaryText(scheme))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.primary.opacity(0.07), in: Capsule())
+            .help("Totals for this key only. Request history needs an admin key.")
+            .accessibilityLabel("Member key. Totals only. Request history needs an admin key.")
+    }
+}
+
+/// The popover's tab row. A capsule selection keeps it in the same visual family as the period chips.
+struct DetailTabBar: View {
+    @Binding var selection: DetailTab
+    var tabs: [DetailTab]
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs) { tab in
+                let selected = tab == selection
+                Button {
+                    selection = tab
+                } label: {
+                    Text(tab.title)
+                        .font(.caption.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Color.primary : TallyPalette.secondaryText(scheme))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(
+                            selected ? Color.accentColor.opacity(0.18) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Only problems and truncation earn a line in the popover. Healthy capability detail lives in Settings.
+struct PopoverNotice: View {
+    @Bindable var store: TallyStore
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        if let message = store.loadError {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(TallyPalette.warningFill(scheme))
+                Text(message)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                if store.loadFailure == GatewayClient.Failure.unapproved {
+                    Button("Allow") {
+                        Task { _ = await store.approveSpendHost() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+                    .tallyAccent()
+                    .help("Send the saved key to this spend host")
+                } else {
+                    Button("Retry", action: store.reloadSpend)
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .tallyAccent()
+                }
+            }
+        } else if let notice = store.loadNotice, !store.isMember, !notice.isEmpty {
+            Text(notice)
+                .font(.caption)
+                .tallySecondary()
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -219,10 +321,11 @@ struct BudgetBanner: View {
 
 struct PeriodChips: View {
     @Binding var selection: DateRange
+    var periods: [DateRange] = DateRange.chips
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(DateRange.chips) { period in
+            ForEach(periods) { period in
                 let selected = selection == period
                 Button(period.chipTitle) { selection = period }
                     .buttonStyle(.plain)

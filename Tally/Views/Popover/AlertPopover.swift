@@ -9,15 +9,25 @@ struct AlertPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             PopoverTitle {
-                GearButton(action: openSettings)
+                HStack(spacing: 6) {
+                    if store.loadError == nil {
+                        Circle()
+                            .fill(TallyPalette.statusGreen(scheme))
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(store.spendClock(stale: store.loadError != nil))
+                        .font(.caption)
+                        .tallySecondary()
+                    if store.isMember {
+                        MemberBadge()
+                    }
+                    HeaderIconButton(systemName: "chevron.up", label: "Show less") {
+                        store.layout = .compact
+                    }
+                    GearButton(action: openSettings)
+                }
             }
-            if let loadNotice = store.loadNotice, store.loadError == nil {
-                Text(loadNotice)
-                    .font(.caption)
-                    .tallySecondary()
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
+            PopoverNotice(store: store)
             BudgetBanner(store: store)
             todayCard
             monthCard
@@ -35,10 +45,8 @@ struct AlertPopover: View {
             }
             .padding(.horizontal, 4)
             HStack(spacing: 8) {
-                Button("View cost drivers") {
-                    store.detailTab = .conversations
-                    store.conversationPeriod = .today
-                    store.layout = .detailed
+                Button(store.isMember ? "View models" : "View cost drivers") {
+                    store.showCostDrivers()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -74,7 +82,9 @@ struct AlertPopover: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
                     .monospacedDigit()
-                BudgetStatus(level: store.monthlyLevel, period: "monthly")
+                if store.monthlyLevel != .ok {
+                    BudgetStatus(level: store.monthlyLevel, period: "monthly")
+                }
                 BudgetBar(fraction: store.monthFraction, tint: store.monthlyLevel.fill(scheme))
             }
         }

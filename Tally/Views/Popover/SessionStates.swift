@@ -4,167 +4,141 @@ import UniformTypeIdentifiers
 
 struct SignInView: View {
     @Bindable var store: TallyStore
+    var dismiss: (() -> Void)? = nil
     @State private var apiKey = ""
     @State private var apiKeyError: String?
     @FocusState private var apiKeyFocused: Bool
 
+    private var gatewayIsSet: Bool {
+        !store.gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
-        ScrollView {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Tally")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-            }
-            .padding(.bottom, 18)
-
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.primary)
-                .frame(width: 64, height: 64)
-                .overlay {
-                    Image(systemName: "chart.bar.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(Color(nsColor: .windowBackgroundColor))
+        VStack(alignment: .leading, spacing: 10) {
+            PopoverTitle {
+                if let dismiss {
+                    Button("Subscriptions", action: dismiss)
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .tallyAccent()
                 }
-                .padding(.bottom, 16)
+            }
 
-            Text("Connect your LLM Gateway")
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.center)
-            Text("Use a virtual key that can read spend logs. Do not paste the gateway master key.")
-                .font(.subheadline)
-                .tallySecondary()
-                .multilineTextAlignment(.center)
-                .padding(.top, 6)
-                .padding(.horizontal, 8)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Gateway URL")
-                    .font(.caption)
-                    .tallySecondary()
-                TextField("https://gateway.example.com", text: $store.gatewayURL)
-                    .textFieldStyle(.roundedBorder)
-                Text("Adapter")
-                    .font(.caption)
-                    .tallySecondary()
-                Picker("Adapter", selection: $store.gatewayVersion) {
-                    ForEach(GatewayVersion.allCases) { version in
-                        Text(version.title).tag(version)
+            SpendCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionLabel(text: store.organization.isEmpty ? "Gateway" : store.organization)
+                    TextField("https://gateway.example.com", text: $store.gatewayURL)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Gateway")
+                    Picker("Adapter", selection: $store.gatewayVersion) {
+                        ForEach(GatewayVersion.allCases) { version in
+                            Text(version.title).tag(version)
+                        }
                     }
-                }
-                .labelsHidden()
-                Text("Spend URL")
-                    .font(.caption)
-                    .tallySecondary()
-                TextField("https://gateway.example.com/spend/logs/v2", text: store.spendURLBinding)
-                    .textFieldStyle(.roundedBorder)
-                Text("Key page URL")
-                    .font(.caption)
-                    .tallySecondary()
-                TextField("https://gateway.example.com/key", text: $store.keyPageURL)
-                    .textFieldStyle(.roundedBorder)
-                ProfileSummary(store: store)
-                    .padding(.top, 8)
-                if store.isLoadingSetup {
-                    Text("Downloading the profile…")
-                        .font(.caption)
-                        .tallySecondary()
-                        .padding(.top, 8)
-                }
-                if let setupLinkError = store.setupLinkError {
-                    Text(setupLinkError)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
-                }
-                if store.setupFailure != nil {
-                    Button("Copy report", action: store.copyCapabilityReport)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .padding(.top, 4)
-                }
-            }
-            .padding(.top, 18)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("API key")
-                    .font(.caption)
-                    .tallySecondary()
-                SecureField("", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("API key")
-                    .focused($apiKeyFocused)
-                if let apiKeyError {
-                    Text(apiKeyError)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(.top, 8)
-            Button(store.isLoadingUsage ? "Checking…" : "Continue") {
-                let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty {
-                    apiKeyError = "Enter an API key to continue."
-                    apiKeyFocused = true
-                    return
-                }
-                apiKeyError = nil
-                Task {
-                    if let error = await store.signIn(apiKey: trimmed) {
-                        apiKeyError = error
-                        apiKeyFocused = true
+                    .labelsHidden()
+                    .accessibilityLabel("Adapter")
+                    if store.showsCustomSpendURL {
+                        SectionLabel(text: "Spend logs")
+                        TextField("https://gateway.example.com/spend/logs/v2", text: store.spendURLBinding)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Spend logs")
+                    }
+                    SectionLabel(text: "Key page")
+                    TextField("https://gateway.example.com/key", text: $store.keyPageURL)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Key page")
+                    SectionLabel(text: "API key")
+                    SecureField("sk-…", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("API key")
+                        .focused($apiKeyFocused)
+                    notice(apiKeyError)
+                    notice(store.profileError)
+                    notice(store.setupLinkError)
+                    notice(store.authError)
+                    if store.setupFailure != nil {
+                        Button("Copy report", action: store.copyCapabilityReport)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                     }
                 }
             }
-            .disabled(store.isLoadingUsage)
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
-            if store.showsExchange {
-                Button(store.isLoadingUsage ? "Checking…" : "Sign in") {
-                    apiKeyError = store.beginTrackingSignIn()
-                }
-                .disabled(store.isLoadingUsage)
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-            }
-            if let authError = store.authError {
-                Text(authError)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
-            }
-            Button("Get a key") {
-                apiKeyError = store.openKeyPage()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
-            Button("Import profile…") {
-                apiKeyError = ProfileFile.importInto(store)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
 
-            Text("An API key is stored in the macOS Keychain.")
-                .font(.caption)
-                .tallySecondary()
-                .padding(.top, 14)
+            continueControl(prominent: gatewayIsSet)
+            if store.showsExchange { exchangeControl }
+            getKeyControl
+            importControl(prominent: !gatewayIsSet)
         }
         .padding(16)
         .frame(width: 320)
+    }
+
+    @ViewBuilder
+    private func continueControl(prominent: Bool) -> some View {
+        let button = Button(store.isLoadingUsage ? "Checking…" : "Connect") {
+            let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                apiKeyError = "Enter an API key to connect."
+                apiKeyFocused = true
+                return
+            }
+            apiKeyError = nil
+            Task {
+                if let error = await store.signIn(apiKey: trimmed) {
+                    apiKeyError = error
+                    apiKeyFocused = true
+                }
+            }
         }
-        .frame(width: 320, height: 560)
-        .fixedSize()
+        .disabled(store.isLoadingUsage)
+        if prominent {
+            button.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
+        } else {
+            button.buttonStyle(.bordered).controlSize(.large).frame(maxWidth: .infinity)
+        }
+    }
+
+    private var exchangeControl: some View {
+        Button(store.isLoadingUsage ? "Checking…" : "Sign in") {
+            apiKeyError = store.beginTrackingSignIn()
+        }
+        .disabled(store.isLoadingUsage)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var getKeyControl: some View {
+        Button("Open key page") {
+            apiKeyError = store.openKeyPage()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func importControl(prominent: Bool) -> some View {
+        let button = Button(store.isLoadingSetup ? "Importing…" : "Import profile…") {
+            store.profileError = nil
+            ProfileFile.importInto(store) { store.profileError = $0 }
+        }
+        .disabled(store.isLoadingSetup)
+        if prominent {
+            button.buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
+        } else {
+            button.buttonStyle(.bordered).controlSize(.large).frame(maxWidth: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func notice(_ message: String?) -> some View {
+        if let message, !message.isEmpty {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -360,26 +334,52 @@ struct ConnectView: View {
     }
 }
 
+@MainActor
 enum ProfileFile {
-    @MainActor
-    static func importInto(_ store: TallyStore) -> String? {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return store.importProfile(from: url)
+    static func importInto(_ store: TallyStore, done: @escaping (String?) -> Void) {
+        choose(save: false, prompt: "Import", name: nil) { url in
+            guard let url else {
+                done(nil)
+                return
+            }
+            done(store.importProfile(from: url))
+        }
     }
 
-    @MainActor
-    static func exportFrom(_ store: TallyStore) -> String? {
-        let panel = NSSavePanel()
+    static func exportFrom(_ store: TallyStore, done: @escaping (String?) -> Void) {
+        choose(save: true, prompt: "Export", name: "tally-profile.json") { url in
+            guard let url else {
+                done(nil)
+                return
+            }
+            done(store.exportProfile(to: url))
+        }
+    }
+
+    /// MenuBarExtra cancels a panel opened in the same click. Present it on the next turn.
+    private static func choose(save: Bool, prompt: String, name: String?, done: @escaping (URL?) -> Void) {
+        let panel: NSSavePanel = save ? NSSavePanel() : NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "tally-profile.json"
-        panel.prompt = "Export"
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return store.exportProfile(to: url)
+        panel.canCreateDirectories = save
+        panel.prompt = prompt
+        panel.level = .modalPanel
+        panel.hidesOnDeactivate = false
+        if let name {
+            panel.nameFieldStringValue = name
+        }
+        if let open = panel as? NSOpenPanel {
+            open.allowsMultipleSelection = false
+            open.canChooseDirectories = false
+            open.canChooseFiles = true
+        }
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.begin { response in
+                let url = response == .OK ? panel.url : nil
+                Task { @MainActor in
+                    done(url)
+                }
+            }
+        }
     }
 }

@@ -5,13 +5,16 @@ struct PopoverRoot: View {
     @Bindable var store: TallyStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @State private var showConnect = false
 
     var body: some View {
         Group {
-            if store.gatewayEnabled {
+            if store.showsConnectForm || showConnect {
+                SignInView(store: store, dismiss: showConnect ? { showConnect = false } : nil)
+            } else if store.gatewayEnabled {
                 switch store.phase {
                 case .signedOut:
-                    SignInView(store: store)
+                    subscriptionPopover
                 case .loading:
                     LoadingUsageView()
                 case .failed:
@@ -22,8 +25,11 @@ struct PopoverRoot: View {
                     livePopover
                 }
             } else {
-                CompactPopover(store: store, openHistory: openHistory, openSettings: showSettings)
+                subscriptionPopover
             }
+        }
+        .onChange(of: store.isSignedIn) { _, signedIn in
+            if signedIn { showConnect = false }
         }
         .preferredColorScheme(store.appearance.colorScheme)
         .onAppear {
@@ -43,6 +49,15 @@ struct PopoverRoot: View {
         case .detailed:
             DetailedPopover(store: store, openHistory: openHistory, openSettings: showSettings)
         }
+    }
+
+    private var subscriptionPopover: some View {
+        CompactPopover(
+            store: store,
+            openHistory: openHistory,
+            openSettings: showSettings,
+            connectGateway: store.gatewayEnabled && !store.isSignedIn ? { showConnect = true } : nil
+        )
     }
 
     private func openHistory() {

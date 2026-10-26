@@ -49,7 +49,7 @@ struct CompactPopover: View {
                     .tallySecondary()
             }
 
-            if showSpend {
+            if showSpend, !store.ledger.todayModels.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionLabel(text: "Top models today")

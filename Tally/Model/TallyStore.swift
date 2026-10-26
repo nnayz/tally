@@ -7,6 +7,8 @@ import SwiftUI
 @Observable
 final class TallyStore {
     var ledger = Ledger(requests: [], now: Date(), dayStart: .utcMidnight)
+    /// Set while the signed-in key is a member. Admin keys leave this nil and use request rows.
+    private var memberSpend: GatewayClient.MemberSpend?
     var isLoadingUsage = false
     var loadError: String?
     var loadFailure: GatewayClient.Failure?
@@ -50,7 +52,7 @@ final class TallyStore {
     var dayStart: DayStart {
         didSet {
             persist()
-            ledger = Ledger(requests: ledger.requests, now: Date(), dayStart: dayStart)
+            ledger = currentLedger()
         }
     }
     var appearance: AppearanceChoice {
@@ -422,9 +424,11 @@ final class TallyStore {
 
     var phase: SessionPhase {
         if !isSignedIn { return .signedOut }
-        if ledger.requests.isEmpty && isLoadingUsage { return .loading }
-        if ledger.requests.isEmpty && loadError != nil { return .failed }
-        if requests(on: Date()).isEmpty { return .empty }
+        let bare = ledger.requests.isEmpty && ledger.todaySpend == 0 && ledger.monthSpend == 0
+        if bare && isLoadingUsage { return .loading }
+        if bare && loadError != nil && memberSpend == nil { return .failed }
+        if memberSpend != nil { return .live }
+        if requests(on: Date()).isEmpty && ledger.todaySpend == 0 { return .empty }
         return .live
     }
 
@@ -633,6 +637,7 @@ final class TallyStore {
         loadError = nil
         loadFailure = nil
         loadNotice = nil
+        memberSpend = nil
         lastUpdated = nil
         approvedHostKey = ""
         setupFailure = nil
@@ -935,6 +940,13 @@ final class TallyStore {
         reloadSpend()
     }
 
+    private func currentLedger(requests: [UsageRequest]? = nil, now: Date = Date()) -> Ledger {
+        if let memberSpend {
+            return Ledger(member: memberSpend, now: now, dayStart: dayStart)
+        }
+        return Ledger(requests: requests ?? ledger.requests, now: now, dayStart: dayStart)
+    }
+
     func reloadSpend() {
         guard gatewayEnabled, isSignedIn, !apiKey.isEmpty else { return }
         guard keyApproved else {
@@ -975,14 +987,19 @@ final class TallyStore {
         isLoadingUsage = false
         switch result {
         case .success(let read):
-            ledger = Ledger(requests: read.requests, now: Date(), dayStart: dayStart)
+            memberSpend = read.member
+            ledger = currentLedger(requests: read.requests)
             lastUpdated = Date()
             loadError = nil
             loadFailure = nil
             setupFailure = nil
             setupLinkError = nil
             setupReportHost = nil
-            loadNotice = read.truncated ? GatewayClient.truncationNotice : nil
+            if read.role == .member {
+                loadNotice = GatewayClient.memberNotice
+            } else {
+                loadNotice = read.truncated ? GatewayClient.truncationNotice : nil
+            }
             if seededLevels {
                 considerNotifications()
             } else {
@@ -1013,16 +1030,21 @@ final class TallyStore {
 
     private func report(failure: GatewayClient.Failure?, profileHost host: String) -> CapabilityReport {
         let shown = host.isEmpty ? Self.localProfileHost : host
-        return CapabilityReport.make(
+        var made = CapabilityReport.make(
             host: GatewayClient.reportHost(spendURL),
             profileHost: shown,
             declaredScope: scopeTitle,
             failure: failure,
-            empty: lastUpdated != nil && ledger.requests.isEmpty,
+            empty: lastUpdated != nil && ledger.requests.isEmpty && memberSpend == nil,
             checking: isLoadingUsage,
             synced: lastUpdated,
             now: Date()
         )
+        if memberSpend != nil {
+            made.history = "Request history needs an admin key."
+            made.spend = "Available, this key only, member totals."
+        }
+        return made
     }
 
     private func blank(_ value: String) -> String? {
@@ -1512,6 +1534,24 @@ final class TallyStore {
         kept.isSignedIn = true
         kept.dropPlaceholderGateway()
         assert(kept.gatewayURL == "https://example.com", "a signed-in key is not cleared")
+
+        let roleName = name + ".role"
+        let roleDefaults = UserDefaults(suiteName: roleName)!
+        roleDefaults.removePersistentDomain(forName: roleName)
+        let roleStore = TallyStore(defaults: roleDefaults, usesKeychain: false, performChecks: false)
+        let member = GatewayClient.MemberSpend(today: 1, month: 2, todayModels: [], monthModels: [])
+        roleStore.memberSpend = member
+        roleStore.ledger = Ledger(member: member, now: Date(), dayStart: roleStore.dayStart)
+        roleStore.isSignedIn = true
+        assert(roleStore.phase == .live, "a member key with spend is connected")
+        let quiet = GatewayClient.MemberSpend(today: 0, month: 0, todayModels: [], monthModels: [])
+        roleStore.memberSpend = quiet
+        roleStore.ledger = Ledger(member: quiet, now: Date(), dayStart: roleStore.dayStart)
+        assert(roleStore.phase == .live, "a member key with zero spend still shows the totals")
+        roleStore.memberSpend = nil
+        roleStore.ledger = Ledger(requests: [], now: Date(), dayStart: roleStore.dayStart)
+        assert(roleStore.phase == .empty, "an admin key with no requests today stays on the empty panel")
+        roleDefaults.removePersistentDomain(forName: roleName)
     }
     #endif
 }

@@ -180,6 +180,7 @@ final class TallyStore {
         didSet { persist() }
     }
     var setupLinkError: String?
+    var profileError: String?
     var setupFailure: GatewayClient.Failure?
     var isLoadingSetup = false
     private var setupReportHost: String?
@@ -189,6 +190,7 @@ final class TallyStore {
     }
     static let localProfileHost = "This Mac"
     private var applyingProfile = false
+    private let defaultsStore: UserDefaults
     var authMethod: AuthMethod {
         didSet { persist() }
     }
@@ -200,6 +202,11 @@ final class TallyStore {
         let custom = spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty { return custom }
         return GatewayClient.presetSpendURL(gatewayURL, version: gatewayVersion)
+    }
+
+    /// The preset path is already determined by the gateway and adapter. Show a field only for a different one.
+    var showsCustomSpendURL: Bool {
+        !spendURLCustom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var keyApproved: Bool {
@@ -275,8 +282,8 @@ final class TallyStore {
     private var announcedDaily: BudgetLevel
     private var announcedMonthly: BudgetLevel
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard, usesKeychain: Bool = true, performChecks: Bool = true) {
+        defaultsStore = defaults
         let signedIn = defaults.object(forKey: Key.signedIn) as? Bool ?? false
         isSignedIn = signedIn
         launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -286,8 +293,10 @@ final class TallyStore {
         let storedRate = defaults.object(forKey: Key.unitsPerUSD) as? Double ?? 1
         unitsPerUSD = storedRate > 0 ? storedRate : 1
         #if DEBUG
-        Format.checkCurrencies()
-        DayStart.checkBoundary()
+        if performChecks {
+            Format.checkCurrencies()
+            DayStart.checkBoundary()
+        }
         #endif
         dayStart = DayStart(rawValue: defaults.string(forKey: Key.dayStart) ?? "") ?? .utcMidnight
         appearance = AppearanceChoice(rawValue: defaults.string(forKey: Key.appearance) ?? "") ?? .system
@@ -310,7 +319,7 @@ final class TallyStore {
         } else {
             enabledSourceIDs = [WidgetSource.gateway.rawValue]
         }
-        gatewayURL = defaults.string(forKey: Key.gateway) ?? "https://gateway.example.com"
+        gatewayURL = defaults.string(forKey: Key.gateway) ?? ""
         gatewayVersion = GatewayVersion(rawValue: defaults.string(forKey: Key.version) ?? "") ?? .v1_106_2
         spendURLCustom = defaults.string(forKey: Key.spendURL) ?? ""
         keyPageURL = defaults.string(forKey: Key.keyPage) ?? ""
@@ -332,15 +341,19 @@ final class TallyStore {
         hostedProfileURL = defaults.string(forKey: Key.hostedProfileURL) ?? ""
         approvedHostKey = defaults.string(forKey: Key.approvedHost) ?? ""
         authMethod = AuthMethod(rawValue: defaults.string(forKey: Key.auth) ?? "") ?? .browser
-        let storedKey = KeychainStore.string(account: "apiKey")
-        if storedKey == "tally-sample-3f9a" {
-            KeychainStore.remove(account: "apiKey")
-            apiKey = ""
+        if usesKeychain {
+            let storedKey = KeychainStore.string(account: "apiKey")
+            if storedKey == "tally-sample-3f9a" {
+                KeychainStore.remove(account: "apiKey")
+                apiKey = ""
+            } else {
+                apiKey = storedKey ?? ""
+            }
+            if KeychainStore.string(account: "session") == "sample-session" {
+                KeychainStore.remove(account: "session")
+            }
         } else {
-            apiKey = storedKey ?? ""
-        }
-        if KeychainStore.string(account: "session") == "sample-session" {
-            KeychainStore.remove(account: "session")
+            apiKey = ""
         }
         announcedDaily = .ok
         announcedMonthly = .ok
@@ -350,14 +363,22 @@ final class TallyStore {
             isSignedIn = false
         }
         #if DEBUG
-        QuotaReader.selfCheck()
-        GatewayClient.selfCheck()
+        if performChecks {
+            QuotaReader.selfCheck()
+            GatewayClient.selfCheck()
+        }
         #endif
         restartRefreshLoop()
         if !quotaSources.isEmpty {
             reloadQuotas()
         }
         ready = true
+        dropPlaceholderGateway()
+        #if DEBUG
+        if performChecks {
+            Self.checkSignedOutImport()
+        }
+        #endif
         reloadSpend()
     }
 
@@ -392,6 +413,11 @@ final class TallyStore {
             worst = worse(worst, quotaLevel(percent))
         }
         return worst
+    }
+
+    /// The key form is only the whole panel when no subscription is on.
+    var showsConnectForm: Bool {
+        gatewayEnabled && !isSignedIn && quotaSources.isEmpty
     }
 
     var phase: SessionPhase {
@@ -1215,6 +1241,35 @@ final class TallyStore {
         }
     }
 
+    /// example.com and gateway.example.com are documentation hosts, not a gateway this Mac connected.
+    private func dropPlaceholderGateway() {
+        guard !isSignedIn, apiKey.isEmpty else { return }
+        let urls = [gatewayURL, spendURL, keyPageURL, helpURL, authorizationURL, tokenURL, revocationURL]
+        let trimmed = urls.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard trimmed.contains(where: Self.isPlaceholderURL) else { return }
+        guard trimmed.allSatisfy({ $0.isEmpty || Self.isPlaceholderURL($0) }) else { return }
+        applyingProfile = true
+        gatewayURL = ""
+        spendURLCustom = ""
+        keyPageURL = ""
+        helpURL = ""
+        authorizationURL = ""
+        tokenURL = ""
+        revocationURL = ""
+        clientID = ""
+        organization = ""
+        profileWindow = ""
+        profileFreshness = ""
+        profileSource = "Entered on this Mac"
+        profileHost = Self.localProfileHost
+        applyingProfile = false
+    }
+
+    private static func isPlaceholderURL(_ raw: String) -> Bool {
+        let host = GatewayClient.reportHost(raw)
+        return host == "example.com" || host == "gateway.example.com"
+    }
+
     private func noteManualEdit() {
         guard ready, !applyingProfile else { return }
         if profileSource != "Entered on this Mac" {
@@ -1262,7 +1317,7 @@ final class TallyStore {
     }
 
     private func persist() {
-        let defaults = UserDefaults.standard
+        let defaults = defaultsStore
         defaults.set(isSignedIn, forKey: Key.signedIn)
         defaults.set(menuBarStyle.rawValue, forKey: Key.menuBar)
         defaults.set(refreshSeconds, forKey: Key.refresh)
@@ -1341,6 +1396,124 @@ final class TallyStore {
         static let auth = "authMethod"
         static let sources = "enabledSources"
     }
+
+    #if DEBUG
+    /// Import must fill a signed-out Mac and must not store a key or sign in.
+    private static func checkSignedOutImport() {
+        let name = "com.nnayz.tally.signed-out-check"
+        guard let defaults = UserDefaults(suiteName: name) else {
+            assertionFailure("signed-out check defaults")
+            return
+        }
+        defaults.removePersistentDomain(forName: name)
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = TallyStore(defaults: defaults, usesKeychain: false, performChecks: false)
+        assert(!store.isSignedIn, "fresh store is signed out")
+        assert(store.apiKey.isEmpty, "fresh store has no key")
+        assert(store.gatewayURL.isEmpty, "fresh store has no gateway")
+        assert(!store.showsCustomSpendURL, "preset spend is not its own field")
+        assert(store.showsConnectForm, "gateway alone uses the key form")
+        store.enabledSourceIDs = [WidgetSource.codex.rawValue]
+        assert(!store.showsConnectForm, "a subscription is not the key form")
+        store.enabledSourceIDs = [WidgetSource.gateway.rawValue]
+        assert(store.showsConnectForm)
+
+        let custom = ConnectionProfile(
+            format: ConnectionProfile.formatVersion,
+            organization: "Northwind",
+            adapter: GatewayVersion.v1_49_6.rawValue,
+            auth: "apiKey",
+            endpoints: [
+                ConnectionProfile.Endpoint(url: "https://llm.northwind.test/custom/logs", capability: "spend", credential: "apiKey"),
+            ],
+            keyPageURL: "https://llm.northwind.test/keys",
+            permissions: ["Read spend logs"],
+            helpURL: "https://llm.northwind.test/help",
+            scope: "this key",
+            window: "Earlier of this month and 30 days ago",
+            freshness: "60 seconds"
+        )
+        store.apply(custom, source: "northwind.json", profileHost: Self.localProfileHost)
+        assert(!store.isSignedIn, "import does not sign in")
+        assert(store.apiKey.isEmpty, "import does not store a key")
+        assert(store.organization == "Northwind")
+        assert(store.gatewayURL == "https://llm.northwind.test")
+        assert(store.gatewayVersion == .v1_49_6)
+        assert(store.keyPageURL == "https://llm.northwind.test/keys")
+        assert(store.spendURL == "https://llm.northwind.test/custom/logs")
+        assert(store.showsCustomSpendURL, "a non-preset spend URL stays visible")
+        assert(store.profileSource == "northwind.json")
+
+        let presetURL = GatewayClient.presetSpendURL("https://llm.northwind.test", version: .v1_106_2)
+        var preset = custom
+        preset.adapter = GatewayVersion.v1_106_2.rawValue
+        preset.endpoints = [
+            ConnectionProfile.Endpoint(url: presetURL, capability: "spend", credential: "apiKey"),
+        ]
+        store.apply(preset, source: "northwind.json", profileHost: Self.localProfileHost)
+        assert(store.gatewayVersion == .v1_106_2)
+        assert(!store.showsCustomSpendURL, "the adapter’s own spend path is not a second field")
+        assert(store.spendURL == presetURL)
+        assert(!store.isSignedIn)
+        assert(store.apiKey.isEmpty)
+
+        let blocked = FileManager.default.temporaryDirectory.appendingPathComponent("tally-blocked-\(UUID().uuidString).json")
+        let blockedJSON = #"{"format":1,"organization":"Loopback","adapter":"1.106.2","auth":"apiKey","endpoints":[{"url":"https://127.0.0.1/spend/logs/v2","capability":"spend","credential":"apiKey"}],"keyPageURL":"https://127.0.0.1/key","permissions":["Read spend logs"],"helpURL":"https://llm.northwind.test/help","scope":"this key","window":"Earlier of this month and 30 days ago","freshness":"60 seconds"}"#
+        try? Data(blockedJSON.utf8).write(to: blocked)
+        defer { try? FileManager.default.removeItem(at: blocked) }
+        let blockedError = store.importProfile(from: blocked)
+        assert(blockedError == GatewayClient.Failure.privateAddress.message, "private profile is refused while signed out")
+        assert(store.organization == "Northwind", "a refused import leaves the previous profile")
+        assert(!store.isSignedIn)
+        assert(store.apiKey.isEmpty)
+
+        let poisoned = FileManager.default.temporaryDirectory.appendingPathComponent("tally-secret-\(UUID().uuidString).json")
+        try? Data(#"{"format":1,"apiKey":"sk-secret","adapter":"1.106.2"}"#.utf8).write(to: poisoned)
+        defer { try? FileManager.default.removeItem(at: poisoned) }
+        let secretError = store.importProfile(from: poisoned)
+        assert(secretError == "This profile contains a secret. Remove it and share the file again.")
+        assert(store.organization == "Northwind")
+        assert(store.apiKey.isEmpty)
+        assert(!store.isSignedIn)
+
+        let missing = store.importProfile(from: FileManager.default.temporaryDirectory.appendingPathComponent("tally-missing-\(UUID().uuidString).json"))
+        assert(missing == "Couldn’t read the profile.")
+        assert(store.organization == "Northwind")
+        assert(!store.isSignedIn)
+
+        defaults.removePersistentDomain(forName: name)
+        defaults.set("https://gateway.example.com", forKey: Key.gateway)
+        defaults.set("Entered on this Mac", forKey: Key.profileSource)
+        let factory = TallyStore(defaults: defaults, usesKeychain: false, performChecks: false)
+        assert(factory.gatewayURL.isEmpty, "the factory example gateway is not a filled-in field")
+        assert(!factory.isSignedIn)
+
+        defaults.set("https://example.com", forKey: Key.gateway)
+        defaults.set("https://example.com/spend/logs/v2", forKey: Key.spendURL)
+        defaults.set("https://example.com/key", forKey: Key.keyPage)
+        defaults.set("https://example.com/help", forKey: Key.helpURL)
+        defaults.set("Example Gateway", forKey: Key.organization)
+        defaults.set("tally-profile.sample.json", forKey: Key.profileSource)
+        let sample = TallyStore(defaults: defaults, usesKeychain: false, performChecks: false)
+        assert(sample.gatewayURL.isEmpty, "a sample example.com profile is not a connection")
+        assert(sample.keyPageURL.isEmpty)
+        assert(sample.organization.isEmpty)
+        assert(sample.profileSource == "Entered on this Mac")
+        assert(!sample.isSignedIn)
+        assert(sample.apiKey.isEmpty)
+
+        defaults.removePersistentDomain(forName: name)
+        defaults.set("https://llm.example.com", forKey: Key.gateway)
+        let kept = TallyStore(defaults: defaults, usesKeychain: false, performChecks: false)
+        assert(kept.gatewayURL == "https://llm.example.com", "a real host is kept while signed out")
+        kept.gatewayURL = "https://example.com"
+        kept.apiKey = "sk-kept"
+        kept.isSignedIn = true
+        kept.dropPlaceholderGateway()
+        assert(kept.gatewayURL == "https://example.com", "a signed-in key is not cleared")
+    }
+    #endif
 }
 
 enum SessionPhase {

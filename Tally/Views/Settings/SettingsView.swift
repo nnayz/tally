@@ -168,8 +168,8 @@ private struct GatewaySettings: View {
                 TextField("Client ID", text: $store.clientID)
                 LabeledContent("Profile") {
                     HStack {
-                        Button("Import…") { keyError = ProfileFile.importInto(store) }
-                        Button("Export…") { keyError = ProfileFile.exportFrom(store) }
+                        Button("Import…") { ProfileFile.importInto(store) { keyError = $0 } }
+                        Button("Export…") { ProfileFile.exportFrom(store) { keyError = $0 } }
                     }
                 }
                 TextField("Hosted profile URL", text: $store.hostedProfileURL)
@@ -192,7 +192,7 @@ private struct GatewaySettings: View {
                         .foregroundStyle(.primary)
                 }
                 LabeledContent("Key page") {
-                    Button("Get a key") {
+                    Button("Open key page") {
                         keyError = store.openKeyPage()
                     }
                 }

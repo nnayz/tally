@@ -5,6 +5,9 @@ struct CompactPopover: View {
     @Environment(\.colorScheme) private var scheme
     var openHistory: () -> Void
     var openSettings: () -> Void
+    var connectGateway: (() -> Void)? = nil
+
+    private var showSpend: Bool { store.gatewayEnabled && store.isSignedIn }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -29,22 +32,24 @@ struct CompactPopover: View {
                     .tallySecondary()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if store.gatewayEnabled {
+            if showSpend {
                 CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
-            }
-
-            if store.gatewayEnabled {
                 todayCard
                 monthCard
             }
             SubscriptionSection(store: store)
+            if let connectGateway {
+                Button("Connect gateway", action: connectGateway)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
             if !store.gatewayEnabled && store.quotaSources.isEmpty {
                 Text("Turn on a source in Settings to show it here.")
                     .font(.subheadline)
                     .tallySecondary()
             }
 
-            if store.gatewayEnabled {
+            if showSpend {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionLabel(text: "Top models today")

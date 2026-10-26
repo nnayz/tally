@@ -21,6 +21,25 @@ final class TallyStore {
     }
     var lastUpdated: Date?
 
+    /// Member keys report totals and cannot list requests.
+    var isMember: Bool { memberSpend != nil }
+
+    /// Tabs the current key can actually fill with data.
+    var detailTabs: [DetailTab] {
+        isMember ? [.overview, .models] : DetailTab.allCases
+    }
+
+    /// Member keys have no request rows, so cost drivers are models, not sessions.
+    func showCostDrivers() {
+        detailTab = isMember ? .models : .conversations
+        if isMember {
+            modelPeriod = .today
+        } else {
+            conversationPeriod = .today
+        }
+        layout = .detailed
+    }
+
     var launchAtLogin: Bool {
         didSet { persistLaunchAtLogin() }
     }
@@ -988,6 +1007,10 @@ final class TallyStore {
         switch result {
         case .success(let read):
             memberSpend = read.member
+            if read.member != nil {
+                if !detailTabs.contains(detailTab) { detailTab = .overview }
+                if !DateRange.memberChips.contains(modelPeriod) { modelPeriod = .thisMonth }
+            }
             ledger = currentLedger(requests: read.requests)
             lastUpdated = Date()
             loadError = nil

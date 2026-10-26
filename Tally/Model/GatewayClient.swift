@@ -298,8 +298,8 @@ enum GatewayClient {
     }
 
     static let rowCap = 2_000
-    static let truncationNotice = "Showing the first 2,000 requests in this window."
-    static let memberNotice = "Member key. Totals come from your spend. Request history needs an admin key."
+    static let truncationNotice = "Showing the first 2,000 requests."
+    static let memberNotice = "Member key · totals only"
 
     static func presetSpendURL(_ gatewayURL: String, version: GatewayVersion) -> String {
         let trimmed = gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)

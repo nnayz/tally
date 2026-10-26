@@ -51,7 +51,7 @@ private struct GeneralSettings: View {
                     Text("Every 5 minutes").tag(300)
                 }
             } footer: {
-                Text("Reloads Codex, Claude, Grok, and Cursor quotas on this Mac.")
+                Text("Reloads gateway spend and the plans on this Mac.")
                     .tallySecondary()
             }
             Section {

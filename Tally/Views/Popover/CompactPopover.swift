@@ -13,9 +13,20 @@ struct CompactPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             PopoverTitle {
                 HStack(spacing: 6) {
-                    Text(store.spendClock(stale: store.loadError != nil))
+                    if store.loadError == nil {
+                        Circle()
+                            .fill(TallyPalette.statusGreen(scheme))
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(store.spendClock(stale: store.loadError != nil, livePrefix: "Live ·"))
                         .font(.caption)
                         .tallySecondary()
+                    if store.isMember {
+                        MemberBadge()
+                    }
+                    HeaderIconButton(systemName: "chevron.down", label: "Show details") {
+                        store.layout = .detailed
+                    }
                     Button(action: store.refresh) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11, weight: .medium))
@@ -24,16 +35,12 @@ struct CompactPopover: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Refresh")
+                    .help("Refresh")
+                    GearButton(action: openSettings)
                 }
             }
-            if let loadNotice = store.loadNotice, store.loadError == nil {
-                Text(loadNotice)
-                    .font(.caption)
-                    .tallySecondary()
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            PopoverNotice(store: store)
             if showSpend {
-                CapabilityStatus(report: store.capabilityReport, alwaysCopy: false, copy: store.copyCapabilityReport, approve: store.approveSpendHost)
                 todayCard
                 monthCard
             }
@@ -50,34 +57,18 @@ struct CompactPopover: View {
             }
 
             if showSpend, !store.ledger.todayModels.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                VStack(alignment: .leading, spacing: 8) {
                     SectionLabel(text: "Top models today")
-                    Spacer()
-                    Button("See all") {
-                        store.detailTab = .models
-                        store.modelPeriod = .today
-                        store.layout = .detailed
+                    ForEach(Array(store.ledger.todayModels.prefix(3))) { total in
+                        compactModel(total)
                     }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .tallyAccent()
                 }
-                ForEach(Array(store.ledger.todayModels.prefix(3))) { total in
-                    compactModel(total)
-                }
-            }
             }
 
-            HStack(spacing: 8) {
-                Button("Open Dashboard", action: openHistory)
+            if !store.isMember {
+                Button("Open Usage History", action: openHistory)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                Button("Refresh", action: store.refresh)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                Spacer(minLength: 0)
-                GearButton(action: openSettings)
             }
         }
         .padding(16)

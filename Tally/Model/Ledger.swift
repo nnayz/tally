@@ -477,6 +477,34 @@ struct Ledger {
         }
     }
 
+    /// Member keys have totals and no request rows. History stays empty on purpose.
+    init(member: GatewayClient.MemberSpend, now: Date, dayStart: DayStart) {
+        snapshot = now
+        requests = []
+        highlightedRequestID = 0
+        todaySpend = member.today
+        monthSpend = member.month
+        todayRequestCount = member.todayModels.reduce(0) { $0 + $1.requests }
+        todayTokensIn = 0
+        todayTokensOut = 0
+        todayModels = member.todayModels
+        monthModels = member.monthModels
+        monthConversations = []
+        let todayStart = dayStart.boundary(containing: now)
+        dailySpend = [DailySpend(date: todayStart, amount: member.today)]
+        projectedMonthEnd = member.month
+        let calendar = Calendar.current
+        let dayCount = calendar.range(of: .day, in: .month, for: now)?.count ?? 1
+        var parts = calendar.dateComponents([.year, .month], from: now)
+        parts.day = dayCount
+        projectionDate = calendar.date(from: parts) ?? now
+        if let modelRow = member.todayModels.first {
+            topDriver = CostDriver(name: modelRow.model.id, cost: modelRow.cost, requests: modelRow.requests, model: modelRow.model)
+        } else {
+            topDriver = CostDriver(name: "—", cost: 0, requests: 0, model: AIModel("unknown"))
+        }
+    }
+
     private static func cost(_ rows: [UsageRequest]) -> Double {
         rows.reduce(0) { $0 + $1.cost }
     }

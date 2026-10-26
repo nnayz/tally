@@ -215,6 +215,11 @@ enum GatewayClient {
             message: "This response is not a supported spend log.",
             action: "Return request rows that include a request id."
         )
+        /// The key authenticated, and the spend log is reserved for a proxy admin.
+        static let memberRoute = Failure(
+            message: "This key is a member and its spend route did not respond.",
+            action: "Confirm the gateway serves member spend for this key."
+        )
         static let invalidURL = Failure(
             message: "Enter an https spend URL.",
             action: "Enter an https spend URL."
@@ -272,13 +277,29 @@ enum GatewayClient {
         }
     }
 
+    /// Admin keys read spend logs. Member keys read their own spend totals.
+    enum GatewayRole: Equatable {
+        case admin
+        case member
+    }
+
+    struct MemberSpend: Equatable {
+        var today: Double
+        var month: Double
+        var todayModels: [ModelTotal]
+        var monthModels: [ModelTotal]
+    }
+
     struct Read {
         var requests: [UsageRequest]
         var truncated: Bool
+        var role: GatewayRole = .admin
+        var member: MemberSpend? = nil
     }
 
     static let rowCap = 2_000
     static let truncationNotice = "Showing the first 2,000 requests in this window."
+    static let memberNotice = "Member key. Totals come from your spend. Request history needs an admin key."
 
     static func presetSpendURL(_ gatewayURL: String, version: GatewayVersion) -> String {
         let trimmed = gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -381,7 +402,10 @@ enum GatewayClient {
                         page += 1
                     }
                 }
-            case .status(let code):
+            case .status(let code, let body):
+                if collected.isEmpty, roleRefusal(body) {
+                    return await fetchMember(spendURL: trimmed, apiKey: apiKey, keyPageURL: keyPageURL)
+                }
                 return .failure(.http(code))
             case .redirect:
                 return .failure(.redirected)
@@ -472,6 +496,31 @@ enum GatewayClient {
 
         assert(Failure.http(401).message == "The gateway rejected this API key.")
         assert(Failure.http(403).message == "This key cannot read spend logs.")
+        let adminOnly = Data(
+            #"{"error":{"message":"Authentication Error, Only proxy admin can be used. Route=/spend/logs/v2. Your role=unknown.","code":"401"}}"#.utf8
+        )
+        let missingKey = Data(
+            #"{"error":{"message":"Authentication Error, No api key passed in.","code":"401"}}"#.utf8
+        )
+        assert(roleRefusal(adminOnly))
+        assert(!roleRefusal(missingKey))
+        let memberBody = Data(
+            #"{"daily_spend":1.5,"monthly_spend":9.25,"model_spend_today":{"gpt-4o":1.5,"claude":{"spend":0,"requests":2}},"model_spend_month":{}}"#.utf8
+        )
+        guard let parsed = memberSpend(memberBody) else {
+            assertionFailure("member spend")
+            return
+        }
+        assert(parsed.today == 1.5)
+        assert(parsed.month == 9.25)
+        assert(parsed.todayModels.first?.model.id == "gpt-4o")
+        assert(parsed.todayModels.first?.cost == 1.5)
+        assert(parsed.todayModels.last?.requests == 2)
+        let memberLedger = Ledger(member: parsed, now: date("2026-10-24 18:00:00")!, dayStart: .utcMidnight)
+        assert(memberLedger.todaySpend == 1.5)
+        assert(memberLedger.monthSpend == 9.25)
+        assert(memberLedger.requests.isEmpty)
+        assert(memberSpend(missingKey) == nil)
         assert(Failure.http(404).message == "The spend route was not found. The proxy may be hiding it.")
         assert(Failure.http(502).message == "The gateway returned HTTP 502.")
         assert(Failure.unreachable.message == "Couldn’t reach the gateway.")
@@ -915,7 +964,7 @@ enum GatewayClient {
             case .success(let rows):
                 return .success(finish(rows, now: now, version: .connector))
             }
-        case .status(let code):
+        case .status(let code, _):
             return .failure(.http(code))
         case .redirect:
             return .failure(.redirected)
@@ -1194,7 +1243,7 @@ enum GatewayClient {
 
     private enum Fetch {
         case data(Data)
-        case status(Int)
+        case status(Int, Data)
         case redirect
         case unreachable
     }
@@ -1251,7 +1300,7 @@ enum GatewayClient {
                 }
                 return .success(profile)
             }
-        case .status(let code):
+        case .status(let code, _):
             switch code {
             case 401, 403: return .failure(.profileRefused)
             case 404: return .failure(.profileMissing)
@@ -1316,8 +1365,84 @@ enum GatewayClient {
             return pin.rejected ? .redirect : .unreachable
         }
         if pin.rejected || (300..<400).contains(http.statusCode) { return .redirect }
-        guard (200..<300).contains(http.statusCode) else { return .status(http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else { return .status(http.statusCode, data) }
         return .data(data)
+    }
+
+    /// A personal key is refused on the admin spend log. Read `{origin}/user/daily_spend` instead.
+    private static func fetchMember(spendURL: String, apiKey: String, keyPageURL: String) async -> Result<Read, Failure> {
+        let origin = origin(of: spendURL)
+        guard var components = URLComponents(string: origin),
+              components.scheme == "https",
+              components.host?.isEmpty == false else {
+            return .failure(.memberRoute)
+        }
+        components.path = "/user/daily_spend"
+        components.query = nil
+        components.fragment = nil
+        guard let url = components.url, let trimmed = components.string else {
+            return .failure(.memberRoute)
+        }
+        if sameDestination(trimmed, keyPageURL) { return .failure(.sameDestination) }
+        if let failure = screen(spendURL: trimmed, keyPageURL: keyPageURL) {
+            return .failure(failure)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        switch await send(request, approvedHostKey: hostKey(of: trimmed), keyPageURL: keyPageURL) {
+        case .data(let data):
+            guard let spend = memberSpend(data) else { return .failure(.memberRoute) }
+            return .success(Read(requests: [], truncated: false, role: .member, member: spend))
+        case .status, .redirect, .unreachable:
+            return .failure(.memberRoute)
+        }
+    }
+
+    /// LiteLLM names the role in the admin refusal. A missing or malformed key does not.
+    static func roleRefusal(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        let message: String
+        if let error = object["error"] as? [String: Any] {
+            message = text(error["message"])
+        } else {
+            message = text(object["detail"])
+        }
+        let lower = message.lowercased()
+        return lower.contains("proxy admin") || lower.contains("your role=")
+    }
+
+    static func memberSpend(_ data: Data) -> MemberSpend? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["error"] == nil,
+              object["daily_spend"] != nil,
+              object["monthly_spend"] != nil else { return nil }
+        return MemberSpend(
+            today: number(object["daily_spend"]),
+            month: number(object["monthly_spend"]),
+            todayModels: modelTotals(object["model_spend_today"]),
+            monthModels: modelTotals(object["model_spend_month"])
+        )
+    }
+
+    private static func modelTotals(_ value: Any?) -> [ModelTotal] {
+        guard let dict = value as? [String: Any] else { return [] }
+        return dict.compactMap { key, raw in
+            let name = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return nil }
+            let cost: Double
+            let requests: Int
+            if let row = raw as? [String: Any] {
+                cost = number(row["spend"] ?? row["cost"] ?? row["total_spend"])
+                requests = Int(number(row["requests"] ?? row["count"]))
+            } else {
+                cost = number(raw)
+                requests = 0
+            }
+            return ModelTotal(model: AIModel(name), requests: requests, cost: cost)
+        }
+        .sorted { $0.cost > $1.cost }
     }
 }
 

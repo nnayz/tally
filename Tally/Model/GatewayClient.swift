@@ -215,10 +215,10 @@ enum GatewayClient {
             message: "This response is not a supported spend log.",
             action: "Return request rows that include a request id."
         )
-        /// The key authenticated, and the spend log is reserved for a proxy admin.
+        /// The member routes responded, but did not contain usable spend totals.
         static let memberRoute = Failure(
-            message: "This key is a member and its spend route did not respond.",
-            action: "Confirm the gateway serves member spend for this key."
+            message: "The gateway returned incomplete or invalid member spend totals.",
+            action: "Return daily_spend and either monthly_spend or this key’s spend from /key/info."
         )
         static let invalidURL = Failure(
             message: "Enter an https spend URL.",
@@ -521,6 +521,34 @@ enum GatewayClient {
         assert(memberLedger.monthSpend == 9.25)
         assert(memberLedger.requests.isEmpty)
         assert(memberSpend(missingKey) == nil)
+
+        // The member gateway serves daily and budget-period totals on separate routes.
+        let dailyBody = Data(
+            #"{"daily_spend":1.5,"today":"2026-10-24","model_spend_today":{"gpt-4o":1.5}}"#.utf8
+        )
+        let keyBody = Data(
+            #"{"key":"redacted","info":{"spend":9.25,"budget_duration":"30d","model_spend":{"gpt-4o":9.25}}}"#.utf8
+        )
+        guard let split = memberSpend(dailyBody, keyInfo: keyBody) else {
+            assertionFailure("split member spend")
+            return
+        }
+        assert(split.today == 1.5)
+        assert(split.month == 9.25)
+        assert(split.todayModels.first?.cost == 1.5)
+        assert(split.monthModels.first?.cost == 9.25)
+        assert(memberSpend(dailyBody) == nil, "missing key totals must not become zero")
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"spend":"9.25"}"#.utf8))?.month == 9.25)
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"info":{"spend":0}}"#.utf8))?.month == 0)
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"info":{}}"#.utf8)) == nil)
+        assert(memberSpend(dailyBody, keyInfo: missingKey) == nil)
+        assert(memberSpend(dailyBody, keyInfo: Data("<html>Sign in</html>".utf8)) == nil)
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"info":{"spend":"invalid"}}"#.utf8)) == nil)
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"info":{"spend":true}}"#.utf8)) == nil)
+        assert(memberSpend(dailyBody, keyInfo: Data(#"{"info":{"spend":-1}}"#.utf8)) == nil)
+        assert(memberSpend(Data(#"{"daily_spend":null}"#.utf8), keyInfo: keyBody) == nil)
+        assert(memberSpend(Data(#"{"daily_spend":"NaN"}"#.utf8), keyInfo: keyBody) == nil)
+        assert(memberSpend(memberBody, keyInfo: keyBody) == parsed, "combined totals retain precedence")
         assert(Failure.http(404).message == "The spend route was not found. The proxy may be hiding it.")
         assert(Failure.http(502).message == "The gateway returned HTTP 502.")
         assert(Failure.unreachable.message == "Couldn’t reach the gateway.")
@@ -1369,15 +1397,38 @@ enum GatewayClient {
         return .data(data)
     }
 
-    /// A personal key is refused on the admin spend log. Read `{origin}/user/daily_spend` instead.
+    /// Personal keys read daily totals and, when needed, their budget-period total from `/key/info`.
     private static func fetchMember(spendURL: String, apiKey: String, keyPageURL: String) async -> Result<Read, Failure> {
+        let daily: Data
+        switch await fetchMemberData(path: "/user/daily_spend", spendURL: spendURL, apiKey: apiKey, keyPageURL: keyPageURL) {
+        case .success(let data): daily = data
+        case .failure(let failure): return .failure(failure)
+        }
+        if let spend = memberSpend(daily) {
+            return .success(Read(requests: [], truncated: false, role: .member, member: spend))
+        }
+        // Only a valid daily response missing its monthly total needs the second route.
+        guard let object = try? JSONSerialization.jsonObject(with: daily) as? [String: Any],
+              object["error"] == nil,
+              spendAmount(object["daily_spend"]) != nil,
+              object["monthly_spend"] == nil else { return .failure(.memberRoute) }
+        switch await fetchMemberData(path: "/key/info", spendURL: spendURL, apiKey: apiKey, keyPageURL: keyPageURL) {
+        case .success(let data):
+            guard let spend = memberSpend(daily, keyInfo: data) else { return .failure(.memberRoute) }
+            return .success(Read(requests: [], truncated: false, role: .member, member: spend))
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    private static func fetchMemberData(path: String, spendURL: String, apiKey: String, keyPageURL: String) async -> Result<Data, Failure> {
         let origin = origin(of: spendURL)
         guard var components = URLComponents(string: origin),
               components.scheme == "https",
               components.host?.isEmpty == false else {
             return .failure(.memberRoute)
         }
-        components.path = "/user/daily_spend"
+        components.path = path
         components.query = nil
         components.fragment = nil
         guard let url = components.url, let trimmed = components.string else {
@@ -1393,10 +1444,13 @@ enum GatewayClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         switch await send(request, approvedHostKey: hostKey(of: trimmed), keyPageURL: keyPageURL) {
         case .data(let data):
-            guard let spend = memberSpend(data) else { return .failure(.memberRoute) }
-            return .success(Read(requests: [], truncated: false, role: .member, member: spend))
-        case .status, .redirect, .unreachable:
-            return .failure(.memberRoute)
+            return .success(data)
+        case .status(let code, _):
+            return .failure(.http(code))
+        case .redirect:
+            return .failure(.redirected)
+        case .unreachable:
+            return .failure(.unreachable)
         }
     }
 
@@ -1413,17 +1467,36 @@ enum GatewayClient {
         return lower.contains("proxy admin") || lower.contains("your role=")
     }
 
-    static func memberSpend(_ data: Data) -> MemberSpend? {
+    static func memberSpend(_ data: Data, keyInfo: Data? = nil) -> MemberSpend? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["error"] == nil,
-              object["daily_spend"] != nil,
-              object["monthly_spend"] != nil else { return nil }
+              let today = spendAmount(object["daily_spend"]) else { return nil }
+        var info: [String: Any] = [:]
+        if object["monthly_spend"] == nil, let keyInfo {
+            guard let envelope = try? JSONSerialization.jsonObject(with: keyInfo) as? [String: Any],
+                  envelope["error"] == nil else { return nil }
+            info = envelope["info"] as? [String: Any] ?? envelope
+        }
+        // LiteLLM's `spend` follows the key's budget period; it is not a calendar-month aggregate.
+        guard let month = spendAmount(object["monthly_spend"] ?? info["spend"]) else { return nil }
         return MemberSpend(
-            today: number(object["daily_spend"]),
-            month: number(object["monthly_spend"]),
+            today: today,
+            month: month,
             todayModels: modelTotals(object["model_spend_today"]),
-            monthModels: modelTotals(object["model_spend_month"])
+            monthModels: modelTotals(object["model_spend_month"] ?? info["model_spend"])
         )
+    }
+
+    private static func spendAmount(_ value: Any?) -> Double? {
+        let amount: Double
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            amount = number.doubleValue
+        } else if let text = value as? String, let parsed = Double(text) {
+            amount = parsed
+        } else {
+            return nil
+        }
+        return amount.isFinite && amount >= 0 ? amount : nil
     }
 
     private static func modelTotals(_ value: Any?) -> [ModelTotal] {
